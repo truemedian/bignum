@@ -226,9 +226,7 @@ end
 ---@param num number|string
 function Integer.set(r, num)
     if type(num) == 'string' then
-        -- TODO: parse string
-        error('not implemented')
-        -- return Integer.setString(r, num)
+        return Integer.setString(r, num)
     end
 
     if num < 0 then
@@ -271,6 +269,50 @@ for i = 0, 15 do
     hex_digits[i] = Integer.new(i)
 end
 
+--- Sets the value of the Integer to the given string.
+---@param r Integer result location
+---@param str string
+---@return Integer
+function Integer.setString(r, str)
+    local i = 1
+    local neg = false
+    local base = 10
+
+    if str:sub(i, i) == '-' then
+        neg = true
+        i = 2
+    end
+
+    if str:sub(i, i + 1) == '0x' then
+        base = 16
+        i = i + 2
+    elseif str:sub(i, i + 1) == '0b' then
+        base = 2
+        i = i + 2
+    elseif str:sub(i, i + 1) == '0o' then
+        base = 8
+        i = i + 2
+    end
+
+    if i == #str then
+        error('invalid numeric string')
+    end
+
+    Integer.set(r, 0)
+
+    local tmp = Integer.zero()
+    for j = i, #str do
+        local digit = tonumber(str:sub(j, j), base) or error('invalid numeric string')
+
+        Integer.mulNoAliasScalar(tmp, r, base)
+        Integer.add(r, tmp, hex_digits[digit])
+    end
+
+    r.neg = neg
+
+    return r
+end
+
 --- Constructs an Integer with the hexadecimal value of `hex`.
 ---@param hex string
 ---@return Integer
@@ -280,8 +322,8 @@ function Integer.fromHex(hex)
     for i = 1, #hex do
         local digit = tonumber(hex:sub(i, i), 16) or error('invalid hex string')
 
-        self:shiftLeft(self, 4)
-        self:add(self, hex_digits[digit])
+        Integer.shiftLeft(self, self, 4)
+        Integer.add(self, self, hex_digits[digit])
     end
 
     return self
@@ -373,6 +415,42 @@ function Integer.clone(a)
     return self
 end
 
+--- Returns true if `a` is even.
+--- @param a Integer
+--- @return boolean
+function Integer.isEven(a)
+    return a.limbs[a.n] % 2 == 0
+end
+
+--- Returns true if `a` is odd.
+--- @param a Integer
+--- @return boolean
+function Integer.IsOdd(a)
+    return a.limbs[a.n] % 2 == 1
+end
+
+--- Returns true if `a` is a power of two.
+--- @param a Integer
+--- @return boolean
+function Integer.isPowerOfTwo(a)
+    local n = 0
+
+    for i = 1, a.n do
+        local x = a.limbs[i]
+        if x ~= 0 and bit.band(x, x - 1) == 0 then
+            n = n + 1
+        end
+    end
+
+    return n == 1
+end
+
+-------------------------------------
+---                               ---
+---   Begin Arithmetic Operations ---
+---                               ---
+-------------------------------------
+
 --- returns `|a|`
 --- The result is a mutation of `a`, not a new integer. This mutation shares the same limbs as `a`.
 --- @param a Integer
@@ -394,6 +472,7 @@ function Integer.negate(a)
 end
 
 --- returns -1 if a < b, 0 if a == b, 1 if a > b
+--- The result satisfies the equivalence `a cmp b := order(a, b) cmp 0` where `cmp` is a logical comparison operator.
 --- @param a Integer
 --- @param b Integer
 --- @return number
@@ -506,43 +585,18 @@ function Integer.mulNoAliasScalar(r, a, b)
         return Integer.set(r, 0)
     end
 
-    for i = 1, a.n + 1 do
-        r.limbs[i] = 0
-    end
-
     local c = math.abs(b)
 
     -- simplify multiplication by a power of 2 to a left shift
     if c <= MAX_U32 and bit.band(c, c - 1) == 0 then
-        local shift = 0
+        local shift = math.log(c, 2)
 
-        if bit.band(c, 0x0000FFFF) == 0 then
-            shift = shift + 16
-            c = bit.rshift(c, 16)
-        end
-
-        if bit.band(c, 0x00FF) == 0 then
-            shift = shift + 8
-            c = bit.rshift(c, 8)
-        end
-
-        if bit.band(c, 0x0F) == 0 then
-            shift = shift + 4
-            c = bit.rshift(c, 4)
-        end
-
-        if bit.band(c, 0x3) == 0 then
-            shift = shift + 2
-            c = bit.rshift(c, 2)
-        end
-
-        if bit.band(c, 0x1) == 0 then
-            shift = shift + 1
-        end
-
-        limbwiseShiftLeft(r.limbs, a.limbs, shift, a.n)
-        r.n = limbwiseNormalize(r.limbs, a.n + math.floor(shift / LIMB_BITS) + 1)
+        Integer.shiftLeft(r, a, shift)
     else
+        for i = 1, a.n + 1 do
+            r.limbs[i] = 0
+        end
+
         limbwiseAddMulScalar(r.limbs, 1, a.limbs, b, a.n)
         r.n = limbwiseNormalize(r.limbs, a.n + 1)
     end
@@ -560,27 +614,31 @@ function Integer.mulNoAlias(r, a, b)
     assert(not rawequal(r, a), 'r must not alias a')
     assert(not rawequal(r, b), 'r must not alias b')
 
-    r.neg = a.neg ~= b.neg
     if a.n == 1 and b.n == 1 then
         Integer.set(r, a.limbs[1] * b.limbs[1])
         return r
-    end
-
-    for i = 1, a.n + b.n do
-        r.limbs[i] = 0
     end
 
     if a.n < b.n then
         a, b = b, a
     end
 
-    if b.n == 1 then
-        return Integer.mulNoAliasScalar(r, a, b.limbs[1])
+    if Integer.isPowerOfTwo(b) then
+        local shift = Integer.log2floor(b)
+
+        Integer.shiftLeft(r, a, shift)
+    elseif b.n == 1 then
+        Integer.mulNoAliasScalar(r, a, b.limbs[1])
+    else
+        for i = 1, a.n + b.n do
+            r.limbs[i] = 0
+        end
+
+        limbwiseMultiply(r.limbs, a.limbs, b.limbs, a.n, b.n)
+        r.n = limbwiseNormalize(r.limbs, a.n + b.n)
     end
 
-    limbwiseMultiply(r.limbs, a.limbs, b.limbs, a.n, b.n)
-    r.n = limbwiseNormalize(r.limbs, a.n + b.n)
-
+    r.neg = a.neg ~= b.neg
     return r
 end
 
@@ -601,40 +659,11 @@ function Integer.divTruncScalar(q, r, a, b)
         return q, r
     end
 
-    local b_neg = false
-    if b < 0 then
-        b_neg = true
-        b = -b
-    end
+    local c = math.abs(b)
 
     -- simplify division by a power of 2 to a right shift
-    if b <= MAX_U32 and bit.band(b, b - 1) == 0 then
-        local shift = 0
-
-        if bit.band(b, 0x0000FFFF) == 0 then
-            shift = shift + 16
-            b = bit.rshift(b, 16)
-        end
-
-        if bit.band(b, 0x00FF) == 0 then
-            shift = shift + 8
-            b = bit.rshift(b, 8)
-        end
-
-        if bit.band(b, 0x0F) == 0 then
-            shift = shift + 4
-            b = bit.rshift(b, 4)
-        end
-
-        if bit.band(b, 0x3) == 0 then
-            shift = shift + 2
-            b = bit.rshift(b, 2)
-        end
-
-        if bit.band(b, 0x1) == 0 then
-            shift = shift + 1
-            b = bit.rshift(b, 1)
-        end
+    if c <= MAX_U32 and bit.band(c, c - 1) == 0 then
+        local shift = math.log(c, 2)
 
         Integer.shiftRight(q, a, shift)
         local tmp = Integer.clone(q)
@@ -644,7 +673,7 @@ function Integer.divTruncScalar(q, r, a, b)
         return q, r
     end
 
-    assert(b < RADIX, 'b must be less than ' .. RADIX)
+    assert(c < RADIX, 'b must be less than ' .. RADIX)
 
     local remainder = 0
     for i = a.n, 1, -1 do
@@ -653,22 +682,22 @@ function Integer.divTruncScalar(q, r, a, b)
         if pdiv == 0 then
             q.limbs[i] = 0
             remainder = 0
-        elseif pdiv < b then
+        elseif pdiv < c then
             q.limbs[i] = 0
             remainder = bit.band(pdiv, LIMB_MASK)
-        elseif pdiv == b then
+        elseif pdiv == c then
             q.limbs[i] = 1
             remainder = 0
         else -- TODO: assert this is always correct
-            q.limbs[i] = bit.band(math.floor(pdiv / b), LIMB_MASK)
-            remainder = pdiv % b
+            q.limbs[i] = bit.band(math.floor(pdiv / c), LIMB_MASK)
+            remainder = pdiv % c
         end
     end
 
     q.n = limbwiseNormalize(q.limbs, a.n)
     Integer.set(r, remainder)
 
-    q.neg = a.neg ~= b_neg
+    q.neg = a.neg ~= (b < 0)
     r.neg = a.neg
 
     return q, r
@@ -711,7 +740,15 @@ function Integer.divTrunc(q, r, a, b)
     a.neg = false
     b.neg = false
 
-    if b.n == 1 then
+    if Integer.isPowerOfTwo(b) then
+        local shift = Integer.log2floor(b)
+
+        Integer.shiftRight(q, a, shift)
+        local tmp = Integer.clone(q)
+        Integer.shiftLeft(tmp, tmp, shift)
+
+        Integer.sub(r, a, tmp)
+    elseif b.n == 1 then
         Integer.divTruncScalar(q, r, a, b.limbs[1])
     else
         -- TODO: optimize
@@ -774,19 +811,15 @@ function Integer.divFloorScalar(q, r, a, b)
 
     -- adjust the truncated result to match floor behavior
     b_n = Integer.new(b)
-    if b < 0 then
-        if not Integer.isZero(r) then
-            Integer.sub(q, q, Integer.one())
-            r.neg = true
-            Integer.add(r, r, b_n)
-        end
-    elseif a.neg then
-        if not Integer.isZero(r) then
-            Integer.sub(q, q, Integer.one())
-            r.neg = false
-            Integer.sub(r, r, b_n)
-        end
-    elseif b < 0 then
+    if not a.neg and b < 0 and not Integer.isZero(r) then
+        Integer.sub(q, q, Integer.one())
+        r.neg = true
+        Integer.add(r, r, b_n)
+    elseif a.neg and b >= 0 and not Integer.isZero(r) then
+        Integer.sub(q, q, Integer.one())
+        r.neg = false
+        Integer.sub(r, r, b_n)
+    elseif a.neg and b < 0 then
         r.neg = false
     end
 
@@ -804,18 +837,14 @@ function Integer.divFloor(q, r, a, b)
     Integer.divTrunc(q, r, a, b)
 
     -- adjust the truncated result to match floor behavior
-    if b.neg and not a.neg then
-        if not Integer.isZero(r) then
-            Integer.sub(q, q, Integer.one())
-            r.neg = false
-            Integer.sub(r, r, b)
-        end
-    elseif a.neg and not b.neg then
-        if not Integer.isZero(r) then
-            Integer.sub(q, q, Integer.one())
-            r.neg = true
-            Integer.add(r, r, b)
-        end
+    if b.neg and not a.neg and not Integer.isZero(r) then
+        Integer.sub(q, q, Integer.one())
+        r.neg = false
+        Integer.sub(r, r, b)
+    elseif a.neg and not b.neg and not Integer.isZero(r) then
+        Integer.sub(q, q, Integer.one())
+        r.neg = true
+        Integer.add(r, r, b)
     elseif a.neg and b.neg then
         r.neg = false
     end
@@ -829,20 +858,14 @@ end
 ---@param b Integer
 ---@return Integer
 function Integer.pow(r, a, b)
-    if Integer.isZero(b) then
-        return Integer.set(r, 1)
-    end
-
-    if Integer.isZero(a) then
-        return Integer.set(r, 0)
-    end
-
     if b.neg then
         return Integer.set(r, 0)
-    end
-
-    if b.n == 1 then
+    elseif Integer.isZero(b) then
+        return Integer.set(r, 1)
+    elseif b.n == 1 then
         return Integer.powScalar(r, a, b.limbs[1])
+    elseif Integer.isZero(a) then
+        return Integer.set(r, 0)
     end
 
     local count = Integer.clone(b)
@@ -865,16 +888,14 @@ end
 ---@param b number
 ---@return Integer
 function Integer.powScalar(r, a, b)
-    if b == 0 then
+    if b < 0 then
+        return Integer.set(r, 0)
+    elseif b == 0 then
         return Integer.set(r, 1)
-    end
-
-    if b == 1 then
+    elseif b == 1 then
         return Integer.copy(r, a)
-    end
-
-    if b == 2 then
-        return Integer.mul(r, a, a)
+    elseif b == 2 then
+        return Integer.mulNoAlias(r, a, a)
     end
 
     -- handle the non-trivial cases
@@ -886,6 +907,27 @@ function Integer.powScalar(r, a, b)
     end
 
     return r
+end
+
+-------------------------------------
+---                               ---
+---   Begin Bitwise Operations    ---
+---                               ---
+-------------------------------------
+
+--- Returns true if the `n`-th bit of `a` is set. Bits are 0-indexed.
+--- @param a Integer
+--- @param n integer
+--- @return boolean
+function Integer.bitTest(a, n)
+    local n_limb = math.floor(n / LIMB_BITS) + 1
+    local n_bit = n % LIMB_BITS
+
+    if n_limb > a.n then
+        return false
+    end
+
+    return bit.band(a.limbs[n_limb], bit.lshift(1, n_bit)) ~= 0
 end
 
 --- returns `r = a | b`
@@ -1176,6 +1218,19 @@ function Integer.shiftRight(r, a, shift)
     end
 
     return r
+end
+
+--------------------------------------
+---                                ---
+---   Begin Mathematical Functions ---
+---                                ---
+--------------------------------------
+
+--- returns `floor(log2(|a|))`
+--- @param a Integer
+--- @return integer
+function Integer.log2floor(a)
+    return (a.n - 1) * LIMB_BITS + math.floor(math.log(a.limbs[a.n], 2))
 end
 
 function Integer.__add(a, b)
