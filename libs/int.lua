@@ -673,7 +673,7 @@ function Integer.mulNoAlias(r, a, b)
     end
 
     if Integer.isPowerOfTwo(b) then
-        local shift = Integer.log2floor(b)
+        local shift = Integer.bitCountAbs(b) - 1
 
         Integer.shiftLeft(r, a, shift)
     elseif b.n == 1 then
@@ -792,7 +792,7 @@ function Integer.divTrunc(q, r, a, b)
     b.neg = false
 
     if Integer.isPowerOfTwo(b) then
-        local shift = Integer.log2floor(b)
+        local shift = Integer.bitCountAbs(b) - 1
 
         Integer.shiftRight(q, a, shift)
         local tmp = Integer.clone(q)
@@ -1208,6 +1208,9 @@ function Integer.bitXor(r, a, b)
 end
 
 --- returns `r = ~a`
+--- @param r Integer
+--- @param a Integer
+--- @return Integer
 function Integer.bitNot(r, a)
     Integer.copy(r, Integer.negate(a))
     Integer.sub(r, r, Integer.one())
@@ -1271,20 +1274,91 @@ end
 ---                                ---
 --------------------------------------
 
---- returns `floor(log2(|a|))`
+--- returns the number of bits required to represent `|a|`
 --- @param a Integer
 --- @return integer
-function Integer.log2floor(a)
-    return (a.n - 1) * LIMB_BITS + math.floor(math.log(a.limbs[a.n], 2))
+function Integer.bitCountAbs(a)
+    return (a.n - 1) * LIMB_BITS + math.ceil(math.log(a.limbs[a.n] + 1, 2))
 end
+
+--- returns `max(a, ...)`
+--- @param a Integer
+--- @param ... Integer
+--- @return Integer
+function Integer.max(a, ...)
+    for i = 1, select('#', ...) do
+        local b = select(i, ...)
+
+        if Integer.order(a, b) < 0 then
+            a = b
+        end
+    end
+
+    return a
+end
+
+--- returns `min(a, ...)`
+--- @param a Integer
+--- @param ... Integer
+--- @return Integer
+function Integer.min(a, ...)
+    for i = 1, select('#', ...) do
+        local b = select(i, ...)
+
+        if Integer.order(a, b) > 0 then
+            a = b
+        end
+    end
+
+    return a
+end
+
+--- returns `r = floor(sqrt(a))`
+--- @param r Integer
+--- @param a Integer
+--- @return Integer
+function Integer.sqrt(r, a)
+    if Integer.isZero(a) or a.neg then
+        return Integer.set(r, 0)
+    end
+
+    local shift = math.floor((Integer.bitCountAbs(a) + 1) / 2)
+
+    local t = Integer.zero()
+    local rem = Integer.zero()
+
+    local u = Integer.one()
+    Integer.shiftLeft(u, u, shift)
+    local s = Integer.clone(u)
+
+    while true do
+        Integer.divFloor(t, rem, a, s)
+        Integer.add(t, t, s)
+        Integer.shiftRight(u, t, 1)
+
+        if Integer.order(u, s) >= 0 then
+            Integer.copy(r, s)
+            break
+        end
+
+        s, u = u, s
+    end
+
+    return r
+end
+
+-------------------------------------
+---                               ---
+---   Begin Metatable Functions   ---
+---                               ---
+-------------------------------------
 
 function Integer.__add(a, b)
     a = getmetatable(a) == Integer and a or Integer.new(a)
     b = getmetatable(b) == Integer and b or Integer.new(b)
 
     local r = Integer.zero()
-    Integer.add(r, a, b)
-    return r
+    return Integer.add(r, a, b)
 end
 
 function Integer.__sub(a, b)
@@ -1292,8 +1366,7 @@ function Integer.__sub(a, b)
     b = getmetatable(b) == Integer and b or Integer.new(b)
 
     local r = Integer.zero()
-    Integer.sub(r, a, b)
-    return r
+    return Integer.sub(r, a, b)
 end
 
 function Integer.__mul(a, b)
@@ -1301,18 +1374,16 @@ function Integer.__mul(a, b)
 
     if type(b) == 'number' then
         -- a must be an Integer
-        Integer.mulNoAliasScalar(r, a, b)
+        return Integer.mulNoAliasScalar(r, a, b)
     elseif type(a) == 'number' then
         -- b must be an Integer
-        Integer.mulNoAliasScalar(r, b, a)
+        return Integer.mulNoAliasScalar(r, b, a)
     else
         a = getmetatable(a) == Integer and a or Integer.new(a)
         b = getmetatable(b) == Integer and b or Integer.new(b)
 
-        Integer.mulNoAlias(r, a, b)
+        return Integer.mulNoAlias(r, a, b)
     end
-
-    return r
 end
 
 function Integer.__div(a, b)
@@ -1321,15 +1392,13 @@ function Integer.__div(a, b)
 
     if type(b) == 'number' then
         -- a must be an Integer
-        Integer.divFloorScalar(q, r, a, b)
+        return Integer.divFloorScalar(q, r, a, b)
     else
         a = getmetatable(a) == Integer and a or Integer.new(a)
         b = getmetatable(b) == Integer and b or Integer.new(b)
 
-        Integer.divFloor(q, r, a, b)
+        return Integer.divFloor(q, r, a, b)
     end
-
-    return q
 end
 Integer.__idiv = Integer.__div
 
@@ -1355,28 +1424,54 @@ function Integer.__pow(a, b)
     b = getmetatable(b) == Integer and b or Integer.new(b)
 
     local r = Integer.zero()
-    Integer.pow(r, a, b)
-    return r
+    return Integer.pow(r, a, b)
 end
 
 function Integer.__unm(a)
     return Integer.negate(Integer.clone(a))
 end
 
+function Integer.__band(a, b)
+    a = getmetatable(a) == Integer and a or Integer.new(a)
+    b = getmetatable(b) == Integer and b or Integer.new(b)
+
+    local r = Integer.zero()
+    return Integer.bitAnd(r, a, b)
+end
+
+function Integer.__bor(a, b)
+    a = getmetatable(a) == Integer and a or Integer.new(a)
+    b = getmetatable(b) == Integer and b or Integer.new(b)
+
+    local r = Integer.zero()
+    return Integer.bitOr(r, a, b)
+end
+
+function Integer.__bxor(a, b)
+    a = getmetatable(a) == Integer and a or Integer.new(a)
+    b = getmetatable(b) == Integer and b or Integer.new(b)
+
+    local r = Integer.zero()
+    return Integer.bitXor(r, a, b)
+end
+
+function Integer.__bnot(a)
+    local r = Integer.zero()
+    return Integer.bitNot(r, a)
+end
+
 function Integer.__shl(a, shift)
     shift = math.floor(shift)
 
     local r = Integer.zero()
-    Integer.shiftLeft(r, a, shift)
-    return r
+    return Integer.shiftLeft(r, a, shift)
 end
 
 function Integer.__shr(a, shift)
     shift = math.floor(shift)
 
     local r = Integer.zero()
-    Integer.shiftRight(r, a, shift)
-    return r
+    return Integer.shiftRight(r, a, shift)
 end
 
 function Integer.__eq(a, b)
