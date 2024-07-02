@@ -2,6 +2,7 @@
 -- Limbs are stored little endian, with the radix provided below
 local bit = require('bit')
 
+local MAX_PRECISION = 2 ^ 53
 local LIMB_BITS = 26
 local RADIX = 2 ^ LIMB_BITS
 local LIMB_MASK = RADIX - 1
@@ -10,6 +11,20 @@ local MAX_U32 = 2 ^ 32 - 1
 
 assert(RADIX * RADIX ~= RADIX * RADIX + 1, 'radix overflow')
 assert(RADIX * RADIX ~= RADIX * RADIX + 2, 'radix overflow')
+
+local function addWithOverflow(a, b)
+    assert(a >= 0 and b >= 0)
+
+    local sum = a + b
+    return bit.band(sum, LIMB_MASK), sum >= RADIX and 1 or 0
+end
+
+local function subWithOverflow(a, b)
+    assert(a >= 0 and b >= 0)
+
+    local diff = a - b
+    return diff % RADIX, diff < 0 and 1 or 0
+end
 
 --- computes r + a * b + carry
 local function addMulWithCarry(r, a, b, carry)
@@ -25,23 +40,19 @@ end
 local function limbwiseAddWithCarry(r, a, b, a_n, b_n)
     assert(a_n >= b_n)
 
-    local i = 1
     local carry = 0
+    local ov1, c1, c2
 
     -- add the common limbs
-    while i <= b_n do
-        local ov = a[i] + b[i] + carry
-        r[i] = bit.band(ov, LIMB_MASK)
-        carry = bit.rshift(ov, LIMB_BITS)
-        i = i + 1
+    for i = 1, b_n do
+        ov1, c1 = addWithOverflow(a[i], b[i])
+        r[i], c2 = addWithOverflow(ov1, carry)
+        carry = c1 + c2
     end
 
     -- perform the carry on the remaining limbs
-    while i <= a_n do
-        local ov = a[i] + carry
-        r[i] = bit.band(ov, LIMB_MASK)
-        carry = bit.rshift(ov, LIMB_BITS)
-        i = i + 1
+    for i = b_n + 1, a_n do
+        r[i], carry = addWithOverflow(a[i], carry)
     end
 
     return carry
@@ -52,23 +63,19 @@ end
 local function limbwiseSubtractWithBorrow(r, a, b, a_n, b_n)
     assert(a_n >= b_n)
 
-    local i = 1
     local borrow = 0
 
     -- subtract the common limbs
-    while i <= b_n do
-        local ov = a[i] - b[i] - borrow
-        r[i] = bit.band(ov, LIMB_MASK)
-        borrow = ov < 0 and 1 or 0
-        i = i + 1
+    for i = 1, b_n do
+        local ov1, c1 = subWithOverflow(a[i], b[i])
+        local ov2, c2 = subWithOverflow(ov1, borrow)
+        r[i] = ov2
+        borrow = c1 + c2
     end
 
     -- perform the borrow on the remaining limbs
-    while i <= a_n do
-        local ov = a[i] - borrow
-        r[i] = bit.band(ov, LIMB_MASK)
-        borrow = ov < 0 and 1 or 0
-        i = i + 1
+    for i = b_n + 1, a_n do
+        r[i], borrow = subWithOverflow(a[i], borrow)
     end
 
     return borrow
@@ -86,14 +93,10 @@ local function limbwiseAddMulScalar(r, i, a, b_i, a_n)
     end
 
     while carry ~= 0 do
-        local ov = r[i + a_n] + carry
-        r[i + a_n] = bit.band(ov, LIMB_MASK)
-        carry = bit.rshift(ov, LIMB_BITS)
+        r[i + a_n], carry = addWithOverflow(r[i + a_n], carry)
 
         i = i + 1
     end
-
-    return carry ~= 0
 end
 
 --- Performs multiplication the limbs `a[a_n]...a[1]` by `b[b_n]...b[1]` and stores the result in `r`.
@@ -329,26 +332,30 @@ function Integer.fromHex(hex)
     return self
 end
 
---- Returns a hexadecimal representation of the given Integer.
+--- Returns the value of the Integer as a Lua number, with a loss of precision if the Integer is too large.
 ---@param num Integer
----@return string
-function Integer.toHexString(num)
-    if Integer.isZero(num) then
-        return '0'
-    end
-
-    local parts = {}
+---@return number
+function Integer.tonumber(num)
+    local n = 0
     for i = num.n, 1, -1 do
-        table.insert(parts, string.format('%06x', num.limbs[i]))
+        n = n * RADIX + num.limbs[i]
     end
 
-    return (num.neg and '-' or '') .. table.concat(parts)
+    return num.neg and -n or n
 end
 
---- Returns a decimal representation of the given Integer.
+local hex_chars = {}
+for i = 0, 15 do
+    hex_chars[i] = string.format('%x', i)
+end
+
+--- Returns a representation of the given Integer in the requested base or decimal if none is provided.
 ---@param num Integer
+---@param base? number
 ---@return string
-function Integer.toDecString(num)
+function Integer.tostring(num, base)
+    base = base or 10
+
     if Integer.isZero(num) then
         return '0'
     end
@@ -359,20 +366,30 @@ function Integer.toDecString(num)
     local parts = {}
     local r = Integer.zero()
 
-    local big_base = 10 ^ math.floor(math.log(RADIX, 10))
+    local big_base = base ^ math.floor(math.log(RADIX, base))
+    local max_digits = math.ceil(math.log(big_base, base))
+
     while not Integer.isZero(tmp) do
-        Integer.divFloorScalar(tmp, r, tmp, big_base)
+        Integer.divTruncScalar(tmp, r, tmp, big_base)
         assert(r.n == 1)
 
-        local part = string.format('%07d', r.limbs[1])
-        table.insert(parts, part)
+        local big_digit = r.limbs[1]
+        for i = 1, max_digits do
+            local digit = big_digit % base
+            big_digit = math.floor(big_digit / base)
+
+            table.insert(parts, hex_chars[digit])
+        end
+    end
+
+    while #parts > 0 and parts[#parts] == '0' do
+        table.remove(parts)
     end
 
     for i = 1, #parts / 2 do
         parts[i], parts[#parts - i + 1] = parts[#parts - i + 1], parts[i]
     end
 
-    parts[1] = parts[1]:match('^0+(.*)$')
     return (num.neg and '-' or '') .. table.concat(parts)
 end
 
@@ -419,14 +436,14 @@ end
 --- @param a Integer
 --- @return boolean
 function Integer.isEven(a)
-    return a.limbs[a.n] % 2 == 0
+    return a.limbs[1] % 2 == 0
 end
 
 --- Returns true if `a` is odd.
 --- @param a Integer
 --- @return boolean
-function Integer.IsOdd(a)
-    return a.limbs[a.n] % 2 == 1
+function Integer.isOdd(a)
+    return a.limbs[1] % 2 == 1
 end
 
 --- Returns true if `a` is a power of two.
@@ -471,15 +488,13 @@ function Integer.negate(a)
     return self
 end
 
---- returns -1 if a < b, 0 if a == b, 1 if a > b
---- The result satisfies the equivalence `a cmp b := order(a, b) cmp 0` where `cmp` is a logical comparison operator.
+--- returns -1 if |a| < |b|, 0 if |a| == |b|, 1 if |a| > |b|
+--- The result satisfies the equivalence `|a| cmp |b| := orderAbs(a, b) cmp 0` where `cmp` is a logical comparison operator.
 --- @param a Integer
 --- @param b Integer
 --- @return number
-function Integer.order(a, b)
-    if a.neg ~= b.neg then
-        return a.neg and -1 or 1
-    elseif a.n ~= b.n then
+function Integer.orderAbs(a, b)
+    if a.n ~= b.n then
         return a.n < b.n and -1 or 1
     else
         for i = a.n, 1, -1 do
@@ -490,6 +505,35 @@ function Integer.order(a, b)
     end
 
     return 0
+end
+
+--- returns -1 if a < b, 0 if a == b, 1 if a > b
+--- The result satisfies the equivalence `a cmp b := order(a, b) cmp 0` where `cmp` is a logical comparison operator.
+--- @param a Integer
+--- @param b Integer
+--- @return number
+function Integer.order(a, b)
+    local a_zero = Integer.isZero(a)
+    local b_zero = Integer.isZero(b)
+
+    if a_zero and b_zero then
+        return 0
+    elseif a_zero then
+        return b.neg and 1 or -1
+    elseif b_zero then
+        return a.neg and -1 or 1
+    end
+
+    if a.neg ~= b.neg then
+        return a.neg and -1 or 1
+    end
+
+    local order_abs = Integer.orderAbs(a, b)
+    if a.neg then
+        order_abs = -order_abs
+    end
+
+    return order_abs
 end
 
 --- returns `r = a + b`
@@ -515,18 +559,16 @@ function Integer.add(r, a, b)
             b = Integer.abs(b)
         end
 
-        if a >= b then
-            r.neg = false
+        if Integer.order(a, b) >= 0 then
             carry = limbwiseSubtractWithBorrow(r.limbs, a.limbs, b.limbs, a.n, b.n)
             r.n = limbwiseNormalize(r.limbs, a.n)
+            r.neg = false
         else
-            r.neg = true
             carry = limbwiseSubtractWithBorrow(r.limbs, b.limbs, a.limbs, b.n, a.n)
             r.n = limbwiseNormalize(r.limbs, b.n)
+            r.neg = true
         end
     else
-        r.neg = a.neg
-
         if a.n >= b.n then
             carry = limbwiseAddWithCarry(r.limbs, a.limbs, b.limbs, a.n, b.n)
             r.n = limbwiseNormalize(r.limbs, a.n)
@@ -534,6 +576,8 @@ function Integer.add(r, a, b)
             carry = limbwiseAddWithCarry(r.limbs, b.limbs, a.limbs, b.n, a.n)
             r.n = limbwiseNormalize(r.limbs, b.n)
         end
+
+        r.neg = a.neg
     end
 
     if carry ~= 0 then
@@ -562,11 +606,11 @@ end
 --- @param b Integer
 --- @return Integer
 function Integer.mul(r, a, b)
-    if r == a then
+    if rawequal(r, a) then
         a = Integer.copy(Integer.zero(), a)
     end
 
-    if r == b then
+    if rawequal(r, b) then
         b = Integer.copy(Integer.zero(), b)
     end
 
@@ -592,13 +636,17 @@ function Integer.mulNoAliasScalar(r, a, b)
         local shift = math.log(c, 2)
 
         Integer.shiftLeft(r, a, shift)
-    else
+    elseif c < RADIX then
         for i = 1, a.n + 1 do
             r.limbs[i] = 0
         end
 
-        limbwiseAddMulScalar(r.limbs, 1, a.limbs, b, a.n)
+        limbwiseAddMulScalar(r.limbs, 1, a.limbs, c, a.n)
         r.n = limbwiseNormalize(r.limbs, a.n + 1)
+    else
+        local b_n = Integer.new(b)
+
+        return Integer.mulNoAlias(r, a, b_n)
     end
 
     r.neg = a.neg ~= (b < 0)
@@ -616,6 +664,7 @@ function Integer.mulNoAlias(r, a, b)
 
     if a.n == 1 and b.n == 1 then
         Integer.set(r, a.limbs[1] * b.limbs[1])
+        r.neg = a.neg ~= b.neg
         return r
     end
 
@@ -653,7 +702,7 @@ function Integer.divTruncScalar(q, r, a, b)
     assert(b ~= 0, 'division by zero')
     assert(not rawequal(q, r), 'q must not alias r')
 
-    if Integer.abs(a) < Integer.new(math.abs(b)) then
+    if Integer.orderAbs(a, Integer.new(b)) < 0 then
         Integer.copy(r, a)
         Integer.set(q, 0)
         return q, r
@@ -665,37 +714,39 @@ function Integer.divTruncScalar(q, r, a, b)
     if c <= MAX_U32 and bit.band(c, c - 1) == 0 then
         local shift = math.log(c, 2)
 
+        local a_save = rawequal(q, a) and Integer.clone(a) or a
         Integer.shiftRight(q, a, shift)
         local tmp = Integer.clone(q)
         Integer.shiftLeft(tmp, tmp, shift)
 
-        Integer.sub(r, a, tmp)
-        return q, r
-    end
-
-    assert(c < RADIX, 'b must be less than ' .. RADIX)
-
-    local remainder = 0
-    for i = a.n, 1, -1 do
-        local pdiv = remainder * RADIX + a.limbs[i] -- double wide multiplication
-        assert(pdiv >= 0)
-        if pdiv == 0 then
-            q.limbs[i] = 0
-            remainder = 0
-        elseif pdiv < c then
-            q.limbs[i] = 0
-            remainder = bit.band(pdiv, LIMB_MASK)
-        elseif pdiv == c then
-            q.limbs[i] = 1
-            remainder = 0
-        else -- TODO: assert this is always correct
-            q.limbs[i] = bit.band(math.floor(pdiv / c), LIMB_MASK)
-            remainder = pdiv % c
+        Integer.sub(r, a_save, tmp)
+    elseif c < RADIX then
+        local remainder = 0
+        for i = a.n, 1, -1 do
+            local pdiv = remainder * RADIX + a.limbs[i] -- double wide multiplication
+            assert(pdiv >= 0)
+            if pdiv == 0 then
+                q.limbs[i] = 0
+                remainder = 0
+            elseif pdiv < c then
+                q.limbs[i] = 0
+                remainder = pdiv
+            elseif pdiv == c then
+                q.limbs[i] = 1
+                remainder = 0
+            else -- TODO: assert this is always correct
+                q.limbs[i] = bit.band(math.floor(pdiv / c), LIMB_MASK)
+                remainder = pdiv % c
+            end
         end
-    end
 
-    q.n = limbwiseNormalize(q.limbs, a.n)
-    Integer.set(r, remainder)
+        q.n = limbwiseNormalize(q.limbs, a.n)
+        Integer.set(r, remainder)
+    else
+        local b_n = Integer.new(b)
+
+        return Integer.divTrunc(q, r, a, b_n)
+    end
 
     q.neg = a.neg ~= (b < 0)
     r.neg = a.neg
@@ -714,7 +765,7 @@ function Integer.divTrunc(q, r, a, b)
     assert(not Integer.isZero(b), 'division by zero')
     assert(not rawequal(q, r), 'q must not alias r')
 
-    if Integer.abs(a) < Integer.abs(b) then
+    if Integer.orderAbs(a, b) < 0 then
         Integer.copy(r, a)
         Integer.set(q, 0)
         return q, r
@@ -810,17 +861,11 @@ function Integer.divFloorScalar(q, r, a, b)
     Integer.divTruncScalar(q, r, a, b)
 
     -- adjust the truncated result to match floor behavior
-    b_n = Integer.new(b)
-    if not a.neg and b < 0 and not Integer.isZero(r) then
+    r.neg = a.neg
+    if a.neg ~= (b < 0) and not Integer.isZero(r) then
         Integer.sub(q, q, Integer.one())
-        r.neg = true
-        Integer.add(r, r, b_n)
-    elseif a.neg and b >= 0 and not Integer.isZero(r) then
-        Integer.sub(q, q, Integer.one())
-        r.neg = false
-        Integer.sub(r, r, b_n)
-    elseif a.neg and b < 0 then
-        r.neg = false
+        r.neg = a.neg
+        Integer.add(r, r, Integer.new(b))
     end
 
     return q, r
@@ -837,16 +882,11 @@ function Integer.divFloor(q, r, a, b)
     Integer.divTrunc(q, r, a, b)
 
     -- adjust the truncated result to match floor behavior
-    if b.neg and not a.neg and not Integer.isZero(r) then
+    r.neg = a.neg
+    if a.neg ~= b.neg and not Integer.isZero(r) then
         Integer.sub(q, q, Integer.one())
-        r.neg = false
-        Integer.sub(r, r, b)
-    elseif a.neg and not b.neg and not Integer.isZero(r) then
-        Integer.sub(q, q, Integer.one())
-        r.neg = true
+        r.neg = a.neg
         Integer.add(r, r, b)
-    elseif a.neg and b.neg then
-        r.neg = false
     end
 
     return q, r
@@ -858,10 +898,18 @@ end
 ---@param b Integer
 ---@return Integer
 function Integer.pow(r, a, b)
-    if b.neg then
-        return Integer.set(r, 0)
-    elseif Integer.isZero(b) then
+    if Integer.isZero(b) then
         return Integer.set(r, 1)
+    elseif a.n == 1 and a.limbs[1] == 1 then
+        Integer.set(r, 1)
+        r.neg = a.neg and Integer.isOdd(b)
+        return r
+    elseif b.neg then
+        if a.neg and Integer.isOdd(b) then
+            return Integer.set(r, -1)
+        else
+            return Integer.set(r, 0)
+        end
     elseif b.n == 1 then
         return Integer.powScalar(r, a, b.limbs[1])
     elseif Integer.isZero(a) then
@@ -888,10 +936,20 @@ end
 ---@param b number
 ---@return Integer
 function Integer.powScalar(r, a, b)
-    if b < 0 then
-        return Integer.set(r, 0)
-    elseif b == 0 then
+    if b == 0 then
         return Integer.set(r, 1)
+    elseif a.n == 1 and a.limbs[1] == 1 then
+        Integer.set(r, 1)
+        r.neg = a.neg and b % 2 == 1
+        return r
+    elseif b < 0 then
+        if a.neg and b % 2 == 1 then
+            return Integer.set(r, -1)
+        else
+            return Integer.set(r, 0)
+        end
+    elseif Integer.isZero(a) then
+        return Integer.set(r, 0)
     elseif b == 1 then
         return Integer.copy(r, a)
     elseif b == 2 then
@@ -905,6 +963,7 @@ function Integer.powScalar(r, a, b)
         Integer.mulNoAlias(r, tmp, a)
         Integer.swap(r, tmp)
     end
+    Integer.swap(r, tmp)
 
     return r
 end
@@ -961,25 +1020,20 @@ function Integer.bitOr(r, a, b)
         local a_borrow = 1
         local r_carry = 1
 
+        local ov1
         for i = 1, b.n do
-            local ov1 = a.limbs[i] - a_borrow
-            a_borrow = ov1 < 0 and 1 or 0
-            local ov2 = bit.band(bit.band(ov1, LIMB_MASK), bit.bnot(b.limbs[i])) + r_carry
-            r.limbs[i] = bit.band(ov2, LIMB_MASK)
-            r_carry = ov2 < 0 and 1 or 0
+            ov1, a_borrow = subWithOverflow(a.limbs[i], a_borrow)
+            r.limbs[i], r_carry = addWithOverflow(bit.band(ov1, bit.band(bit.bnot(b.limbs[i]), LIMB_MASK)), r_carry)
         end
 
         assert(r_carry == 0)
 
         for i = b.n + 1, a.n do
-            local ov1 = a.limbs[i] - a_borrow
-            r.limbs[i] = bit.band(ov1, LIMB_MASK)
+            r.limbs[i], a_borrow = subWithOverflow(a.limbs[i], a_borrow)
 
-            if ov1 >= 0 then
+            if a_borrow == 0 then
                 break
             end
-
-            a_borrow = 1
         end
 
         assert(a_borrow == 0)
@@ -990,38 +1044,33 @@ function Integer.bitOr(r, a, b)
         local b_borrow = 1
         local r_carry = 1
 
+        local ov1
         for i = 1, b.n do
-            local ov1 = b.limbs[i] - b_borrow
-            b_borrow = ov1 < 0 and 1 or 0
-            local ov2 = bit.band(bit.band(ov1, LIMB_MASK), bit.bnot(a.limbs[i])) + r_carry
-            r.limbs[i] = bit.band(ov2, LIMB_MASK)
-            r_carry = ov2 < 0 and 1 or 0
+            ov1, b_borrow = subWithOverflow(b.limbs[i], b_borrow)
+            r.limbs[i], r_carry = addWithOverflow(bit.band(ov1, bit.band(bit.bnot(a.limbs[i]), LIMB_MASK)), r_carry)
         end
 
         assert(r_carry == 0)
         assert(b_borrow == 0)
 
-        r.n = limbwiseNormalize(r.limbs, a.n)
+        r.n = limbwiseNormalize(r.limbs, b.n)
         r.neg = true
     else -- a.neg and b.neg
         local a_borrow = 1
         local b_borrow = 1
         local r_carry = 1
 
+        local ov1, ov2
         for i = 1, b.n do
-            local ov1 = a.limbs[i] - a_borrow
-            a_borrow = ov1 < 0 and 1 or 0
-            local ov2 = b.limbs[i] - b_borrow
-            b_borrow = ov2 < 0 and 1 or 0
-            local ov3 = bit.band(bit.band(ov1, LIMB_MASK), bit.band(ov2, LIMB_MASK)) + r_carry
-            r.limbs[i] = bit.band(ov3, LIMB_MASK)
-            r_carry = ov3 < 0 and 1 or 0
+            ov1, a_borrow = subWithOverflow(a.limbs[i], a_borrow)
+            ov2, b_borrow = subWithOverflow(b.limbs[i], b_borrow)
+            r.limbs[i], r_carry = addWithOverflow(bit.band(ov1, ov2), r_carry)
         end
 
+        assert(b_borrow == 0)
         assert(r_carry == 0)
-        assert(a_borrow == 0)
 
-        r.n = limbwiseNormalize(r.limbs, a.n)
+        r.n = limbwiseNormalize(r.limbs, b.n)
         r.neg = true
     end
 
@@ -1035,9 +1084,9 @@ end
 --- @return Integer
 function Integer.bitAnd(r, a, b)
     if Integer.isZero(a) then
-        return Integer.copy(r, b)
+        return Integer.set(r, 0)
     elseif Integer.isZero(b) then
-        return Integer.copy(r, a)
+        return Integer.set(r, 0)
     end
 
     if a.n < b.n then
@@ -1054,10 +1103,10 @@ function Integer.bitAnd(r, a, b)
     elseif a.neg and not b.neg then
         local a_borrow = 1
 
+        local ov1
         for i = 1, b.n do
-            local ov = a.limbs[i] - a_borrow
-            a_borrow = ov < 0 and 1 or 0
-            r.limbs[i] = bit.band(bit.bnot(bit.band(ov, LIMB_MASK)), b.limbs[i])
+            ov1, a_borrow = subWithOverflow(a.limbs[i], a_borrow)
+            r.limbs[i] = bit.band(bit.band(bit.bnot(ov1), LIMB_MASK), b.limbs[i])
         end
 
         r.n = limbwiseNormalize(r.limbs, b.n)
@@ -1065,11 +1114,13 @@ function Integer.bitAnd(r, a, b)
     elseif not a.neg and b.neg then
         local b_borrow = 1
 
+        local ov1
         for i = 1, b.n do
-            local ov = b.limbs[i] - b_borrow
-            b_borrow = ov < 0 and 1 or 0
-            r.limbs[i] = bit.band(bit.bnot(bit.band(ov, LIMB_MASK)), a.limbs[i])
+            ov1, b_borrow = subWithOverflow(b.limbs[i], b_borrow)
+            r.limbs[i] = bit.band(bit.band(bit.bnot(ov1), LIMB_MASK), a.limbs[i])
         end
+
+        assert(b_borrow == 0)
 
         for i = b.n + 1, a.n do
             r.limbs[i] = a.limbs[i]
@@ -1082,28 +1133,22 @@ function Integer.bitAnd(r, a, b)
         local b_borrow = 1
         local r_carry = 1
 
+        local ov1, ov2
         for i = 1, b.n do
-            local ov1 = a.limbs[i] - a_borrow
-            a_borrow = ov1 < 0 and 1 or 0
-            local ov2 = b.limbs[i] - b_borrow
-            b_borrow = ov2 < 0 and 1 or 0
-            local ov3 = bit.bor(bit.band(ov1, LIMB_MASK), bit.band(ov2, LIMB_MASK)) + r_carry
-            r.limbs[i] = bit.band(ov3, LIMB_MASK)
-            r_carry = ov3 < 0 and 1 or 0
+            ov1, a_borrow = subWithOverflow(a.limbs[i], a_borrow)
+            ov2, b_borrow = subWithOverflow(b.limbs[i], b_borrow)
+            r.limbs[i], r_carry = addWithOverflow(bit.bor(ov1, ov2), r_carry)
         end
 
         assert(b_borrow == 0)
 
         for i = b.n + 1, a.n do
-            local ov1 = a.limbs[i] - a_borrow
-            a_borrow = ov1 < 0 and 1 or 0
-            local ov2 = bit.bnot(bit.band(ov1, LIMB_MASK)) + r_carry
-            r.limbs[i] = bit.band(ov2, LIMB_MASK)
-            r_carry = ov2 < 0 and 1 or 0
+            ov1, a_borrow = subWithOverflow(a.limbs[i], a_borrow)
+            r.limbs[i], r_carry = addWithOverflow(ov1, r_carry)
         end
 
         assert(a_borrow == 0)
-        r[a.n + 1] = r_carry
+        r.limbs[a.n + 1] = r_carry
 
         r.n = limbwiseNormalize(r.limbs, a.n + 1)
         r.neg = true
@@ -1132,22 +1177,16 @@ function Integer.bitXor(r, a, b)
     local b_borrow = b.neg and 1 or 0
     local r_carry = (a.neg ~= b.neg) and 1 or 0
 
+    local ov1, ov2
     for i = 1, b.n do
-        local ov1 = a.limbs[i] - a_borrow
-        a_borrow = ov1 < 0 and 1 or 0
-        local ov2 = b.limbs[i] - b_borrow
-        b_borrow = ov2 < 0 and 1 or 0
-        local ov3 = bit.bxor(bit.band(ov1, LIMB_MASK), bit.band(ov2, LIMB_MASK)) + r_carry
-        r.limbs[i] = bit.band(ov3, LIMB_MASK)
-        r_carry = ov3 < 0 and 1 or 0
+        ov1, a_borrow = subWithOverflow(a.limbs[i], a_borrow)
+        ov2, b_borrow = subWithOverflow(b.limbs[i], b_borrow)
+        r.limbs[i], r_carry = addWithOverflow(bit.bxor(ov1, ov2), r_carry)
     end
 
     for i = b.n + 1, a.n do
-        local ov1 = a.limbs[i] - a_borrow
-        a_borrow = ov1 < 0 and 1 or 0
-        local ov2 = bit.band(ov1, LIMB_MASK) + r_carry
-        r.limbs[i] = bit.band(ov2, LIMB_MASK)
-        r_carry = ov2 < 0 and 1 or 0
+        ov1, a_borrow = subWithOverflow(a.limbs[i], a_borrow)
+        r.limbs[i], r_carry = addWithOverflow(ov1, r_carry)
     end
 
     if a.neg ~= b.neg then
@@ -1168,6 +1207,14 @@ function Integer.bitXor(r, a, b)
     return r
 end
 
+--- returns `r = ~a`
+function Integer.bitNot(r, a)
+    Integer.copy(r, Integer.negate(a))
+    Integer.sub(r, r, Integer.one())
+
+    return r
+end
+
 --- returns `r = a << shift`
 --- @param r Integer
 --- @param a Integer
@@ -1176,8 +1223,7 @@ end
 function Integer.shiftLeft(r, a, shift)
     if shift == 0 then
         return Integer.copy(r, a)
-    end
-    if shift < 0 then
+    elseif shift < 0 then
         return Integer.shiftRight(r, a, -shift)
     end
 
@@ -1196,8 +1242,7 @@ end
 function Integer.shiftRight(r, a, shift)
     if shift == 0 then
         return Integer.copy(r, a)
-    end
-    if shift < 0 then
+    elseif shift < 0 then
         return Integer.shiftLeft(r, a, -shift)
     end
 
@@ -1346,7 +1391,7 @@ function Integer.__le(a, b)
     return Integer.order(a, b) <= 0
 end
 
-Integer.__tostring = Integer.toDecString
+Integer.__tostring = Integer.tostring
 
 --- sanity checks
 
