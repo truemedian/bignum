@@ -2,7 +2,6 @@
 -- Limbs are stored little endian, with the radix provided below
 local bit = require('bit')
 
-local MAX_PRECISION = 2 ^ 53
 local LIMB_BITS = 26
 local RADIX = 2 ^ LIMB_BITS
 local LIMB_MASK = RADIX - 1
@@ -29,10 +28,10 @@ end
 --- computes r + a * b + carry
 local function addMulWithCarry(r, a, b, carry)
     local ab = a * b + r + carry -- double wide multiplication
-    local r2 = bit.band(ab, LIMB_MASK)
-    local c2 = bit.band(math.floor(ab / RADIX), LIMB_MASK)
+    local r1 = math.floor(ab % RADIX)
+    local c1 = math.floor(ab / RADIX)
 
-    return r2, c2
+    return r1, c1
 end
 
 --- Knuth 4.3.1, Algorithm A.
@@ -559,24 +558,22 @@ function Integer.add(r, a, b)
             b = Integer.abs(b)
         end
 
-        if Integer.order(a, b) >= 0 then
-            carry = limbwiseSubtractWithBorrow(r.limbs, a.limbs, b.limbs, a.n, b.n)
-            r.n = limbwiseNormalize(r.limbs, a.n)
-            r.neg = false
-        else
-            carry = limbwiseSubtractWithBorrow(r.limbs, b.limbs, a.limbs, b.n, a.n)
-            r.n = limbwiseNormalize(r.limbs, b.n)
+        r.neg = false
+        if Integer.orderAbs(a, b) < 0 then
+            a, b = b, a
+
             r.neg = true
         end
+
+        carry = limbwiseSubtractWithBorrow(r.limbs, a.limbs, b.limbs, a.n, b.n)
+        r.n = limbwiseNormalize(r.limbs, a.n)
     else
-        if a.n >= b.n then
-            carry = limbwiseAddWithCarry(r.limbs, a.limbs, b.limbs, a.n, b.n)
-            r.n = limbwiseNormalize(r.limbs, a.n)
-        else
-            carry = limbwiseAddWithCarry(r.limbs, b.limbs, a.limbs, b.n, a.n)
-            r.n = limbwiseNormalize(r.limbs, b.n)
+        if a.n < b.n then
+            a, b = b, a
         end
 
+        carry = limbwiseAddWithCarry(r.limbs, a.limbs, b.limbs, a.n, b.n)
+        r.n = limbwiseNormalize(r.limbs, a.n)
         r.neg = a.neg
     end
 
@@ -900,6 +897,8 @@ end
 function Integer.pow(r, a, b)
     if Integer.isZero(b) then
         return Integer.set(r, 1)
+    elseif Integer.isZero(a) then
+        return Integer.set(r, 0)
     elseif a.n == 1 and a.limbs[1] == 1 then
         Integer.set(r, 1)
         r.neg = a.neg and Integer.isOdd(b)
@@ -912,8 +911,6 @@ function Integer.pow(r, a, b)
         end
     elseif b.n == 1 then
         return Integer.powScalar(r, a, b.limbs[1])
-    elseif Integer.isZero(a) then
-        return Integer.set(r, 0)
     end
 
     local count = Integer.clone(b)
@@ -938,6 +935,8 @@ end
 function Integer.powScalar(r, a, b)
     if b == 0 then
         return Integer.set(r, 1)
+    elseif Integer.isZero(a) then
+        return Integer.set(r, 0)
     elseif a.n == 1 and a.limbs[1] == 1 then
         Integer.set(r, 1)
         r.neg = a.neg and b % 2 == 1
@@ -948,8 +947,6 @@ function Integer.powScalar(r, a, b)
         else
             return Integer.set(r, 0)
         end
-    elseif Integer.isZero(a) then
-        return Integer.set(r, 0)
     elseif b == 1 then
         return Integer.copy(r, a)
     elseif b == 2 then

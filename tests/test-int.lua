@@ -8,7 +8,7 @@ local MAX_PRECISION = 2 ^ 53
 assert(MAX_PRECISION + 1 == MAX_PRECISION, 'loss of precision did not happen at MAX_PRECISION')
 assert(MAX_PRECISION - 1 ~= MAX_PRECISION, 'loss of precision happenned before MAX_PRECISION')
 
-local values_normal = {0, 1, -1, 2, -2, 3, -3, 4, -4, 5, 10000, -10000, 5000000, -5000000, 2 ^ 40, MAX_PRECISION / 2, -MAX_PRECISION / 2}
+local values_normal = {0, 1, -1, 2, -2, 3, -3, 4, -4, 5, 10000, -10000, 5000000, -5000000, 2 ^ 26 - 1, 2 ^ 26, 2 ^ 40, MAX_PRECISION / 2, -MAX_PRECISION / 2}
 local values_bitwise = {0, 1, -1, 2, -2, 0x12345678, 0x87654321, 0x33333333, 0x77777777, 0x55aa55aa, 0xaa55aa55, 0x7fffffff, 0x80000000, 0xffffffff}
 
 local r = Integer.zero()
@@ -17,7 +17,7 @@ local tmp = Integer.zero()
 local function b_ne_zero(a, b) return b ~= 0 end
 local function a_positive(a, b) return a >= 0 end
 local function a_negative(a, b) return a < 0 end
-local function pow_precison(a, b) return a ^ b <= MAX_PRECISION end
+local function pow_precison(a, b) return math.abs(a ^ b) <= MAX_PRECISION end
 
 fw.test(all, 'A == A', function(a, b, A, B) return true, A == A end)
 fw.test(all, 'A ~= A', function(a, b, A, B) return false, A ~= A end)
@@ -29,8 +29,6 @@ fw.test(all, 'A >= B', function(a, b, A, B) return a >= b, A >= B end)
 fw.test(all, 'A < B', function(a, b, A, B) return a < b, A < B end)
 fw.test(all, 'A > B', function(a, b, A, B) return a > b, A > B end)
 
-fw.test(all, '-A', function(a, b, A, B) return -a, -A end)
-fw.test(all, 'A:negate()', function(a, b, A, B) return -a, A:negate() end)
 fw.test(all, 'A:abs()', function(a, b, A, B) return math.abs(a), A:abs() end)
 fw.test(all, 'A:isZero()', function(a, b, A, B) return a == 0, A:isZero() end)
 fw.test(all, 'A:isEven()', function(a, b, A, B) return a % 2 == 0, A:isEven() end)
@@ -49,6 +47,12 @@ fw.test(all, 'A:isPowerOfTwo()', function(a, b, A, B)
     local log2_a = math.log(math.abs(a), 2)
     return a ~= 0 and math.abs(log2_a - math.ceil(log2_a)) < 0.0000000000001, A:isPowerOfTwo()
 end)
+
+fw.run(values_normal, Integer.new)
+fw.report()
+
+fw.test(all, '-A', function(a, b, A, B) return -a, -A end)
+fw.test(all, 'A:negate()', function(a, b, A, B) return -a, A:negate() end)
 
 fw.test(all, 'A + B', function(a, b, A, B) return a + b, A + B end)
 fw.test(all, 'A + b', function(a, b, A, B) return a + b, A + b end)
