@@ -236,19 +236,16 @@ function Integer.set(r, num)
         num = -num
     elseif num > 0 then
         r.neg = false
-    else -- set to zero
-        for i = 2, r.n do
-            r.limbs[i] = nil
-        end
-
-        r.neg = false
-        r.n = 1
-        r.limbs[1] = 0
-        return r
     end
 
     for i = 2, r.n do
         r.limbs[i] = nil
+    end
+
+    if num < RADIX then
+        r.n = 1
+        r.limbs[1] = math.floor(num)
+        return r
     end
 
     r.n = 0
@@ -275,10 +272,11 @@ end
 ---@param r Integer result location
 ---@param str string
 ---@return Integer
-function Integer.setString(r, str)
+function Integer.setString(r, str, base)
     local i = 1
     local neg = false
-    local base = 10
+    base = base or 10
+    assert(base <= 16, 'base must be less than or equal to 16')
 
     if str:sub(i, i) == '-' then
         neg = true
