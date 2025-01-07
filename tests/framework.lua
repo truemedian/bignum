@@ -22,7 +22,10 @@ local function run(values, construct)
                         if expected == result then
                             passed[name] = (passed[name] or 0) + 1
                         else
-                            print('fail ' .. name .. '(' .. a .. ', ' .. b .. '): expected ' .. string.format('%i', expected) .. ', got ' .. string.format('%i', result))
+                            expected = type(expected) == 'boolean' and tostring(expected) or string.format('%i', expected)
+                            result = type(result) == 'boolean' and tostring(result) or string.format('%i', result)
+
+                            print('fail ' .. name .. '(' .. a .. ', ' .. b .. '): expected ' .. expected .. ', got ' .. result)
                             failed[name] = (failed[name] or 0) + 1
                         end
                     else
