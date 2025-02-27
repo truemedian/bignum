@@ -1,8 +1,6 @@
-
-
 local has_bit, bit = pcall(require, "bit")
 if not has_bit then
-    has_bit, bit = pcall(require, "bit32")
+	has_bit, bit = pcall(require, "bit32")
 	assert(has_bit, "bit32 or bit library required")
 end
 
@@ -240,7 +238,7 @@ local function limb_mul_sub_long(r, r_i, a, a_i, a_n, b, b_i, b_n)
 end
 
 local limb_mul_add_karatsuba
-function limb_mul_add(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
+local function limb_mul_add(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 	if b_n > a_n then
 		a, a_i, a_n, b, b_i, b_n = b, b_i, b_n, a, a_i, a_n
 	end
@@ -253,7 +251,7 @@ function limb_mul_add(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 end
 
 local limb_mul_sub_karatsuba
-function limb_mul_sub(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
+local function limb_mul_sub(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 	if b_n > a_n then
 		a, a_i, a_n, b, b_i, b_n = b, b_i, b_n, a, a_i, a_n
 	end
@@ -296,7 +294,7 @@ function limb_mul_add_karatsuba(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 	end
 
 	limb_mul_add(p2, 1, p2_limbs, a1, a1_i, math.min(a1_n, p2_limbs), b1, b1_i, math.min(b1_n, p2_limbs))
-	p2_n = limb_normalize(p2, 1, p2_limbs)
+	local p2_n = limb_normalize(p2, 1, p2_limbs)
 
 	-- add p2 * B
 	limb_add_full(r, r_i + split, r, r_i + split, limbs_after_split, p2, 1, p2_n)
@@ -316,7 +314,7 @@ function limb_mul_add_karatsuba(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 	end
 
 	limb_mul_add(p0, 1, p0_limbs, a0, a0_i, a0_n, b0, b0_i, b0_n)
-	p0_n = limb_normalize(p0, 1, p0_limbs)
+	local p0_n = limb_normalize(p0, 1, p0_limbs)
 
 	-- add p0
 	limb_add_full(r, r_i, r, r_i, r_n, p0, 1, p0_n)
@@ -355,7 +353,7 @@ function limb_mul_add_karatsuba(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 		-- a0 < a1
 		limb_sub_full(j0, 1, a1, a1_i, a1_n, a0x, a0x_i, a0x_n)
 	end
-	j0_n = limb_normalize(j0, 1, a_n - split)
+	local j0_n = limb_normalize(j0, 1, a_n - split)
 
 	if j1_sign > 0 then
 		-- b1 > b0
@@ -364,7 +362,7 @@ function limb_mul_add_karatsuba(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 		-- b1 < b0
 		limb_sub_full(j1, 1, b0x, b0x_i, b0x_n, b1, b1_i, b1_n)
 	end
-	j1_n = limb_normalize(j1, 1, b_n - split)
+	local j1_n = limb_normalize(j1, 1, b_n - split)
 
 	if j0_sign * j1_sign > 0 then
 		-- p1 = j0 * j1
@@ -398,7 +396,7 @@ function limb_mul_sub_karatsuba(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 	end
 
 	limb_mul_add(p2, 1, p2_limbs, a1, a1_i, math.min(a1_n, p2_limbs), b1, b1_i, math.min(b1_n, p2_limbs))
-	p2_n = limb_normalize(p2, 1, p2_limbs)
+	local p2_n = limb_normalize(p2, 1, p2_limbs)
 
 	-- add p2 * B
 	limb_sub_full(r, r_i + split, r, r_i + split, limbs_after_split, p2, 1, p2_n)
@@ -414,7 +412,7 @@ function limb_mul_sub_karatsuba(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 	end
 
 	limb_mul_add(p0, 1, p0_limbs, a0, a0_i, a0_n, b0, b0_i, b0_n)
-	p0_n = limb_normalize(p0, 1, p0_limbs)
+	local p0_n = limb_normalize(p0, 1, p0_limbs)
 
 	-- add p0
 	limb_sub_full(r, r_i, r, r_i, r_n, p0, 1, p0_n)
@@ -451,7 +449,7 @@ function limb_mul_sub_karatsuba(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 		-- a0 < a1
 		limb_sub_full(j0, 1, a1, a1_i, a1_n, a0x, a0x_i, a0x_n)
 	end
-	j0_n = limb_normalize(j0, 1, a_n - split)
+	local j0_n = limb_normalize(j0, 1, a_n - split)
 
 	if j1_sign > 0 then
 		-- b1 > b0
@@ -460,7 +458,7 @@ function limb_mul_sub_karatsuba(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 		-- b1 < b0
 		limb_sub_full(j1, 1, b0x, b0x_i, b0x_n, b1, b1_i, b1_n)
 	end
-	j1_n = limb_normalize(j1, 1, b_n - split)
+	local j1_n = limb_normalize(j1, 1, b_n - split)
 
 	if j0_sign * j1_sign > 0 then
 		-- p1 = j0 * j1

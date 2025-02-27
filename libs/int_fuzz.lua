@@ -31,5 +31,4 @@ end
 
 luzer.Fuzz(function(buf)
 	check(buf)
-end, nil, { })
-
+end, nil, {})

@@ -3,7 +3,7 @@ local Integer = require("int")
 local bit = require("bit")
 
 local LIMIT = 20
-local function trunc(n)
+local function truncate(n)
 	if n >= 0 then
 		return math.floor(n)
 	else
@@ -336,10 +336,10 @@ describe("signed integer arithmetic", function()
 					b:set_scalar(j)
 
 					r:pow(a, b)
-					assert.equal(trunc(i ^ j), r:to_scalar())
+					assert.equal(truncate(i ^ j), r:to_scalar())
 
 					r:pow_scalar(a, j)
-					assert.equal(trunc(i ^ j), r:to_scalar())
+					assert.equal(truncate(i ^ j), r:to_scalar())
 
 					assert.equal(i, a:to_scalar())
 					assert.equal(j, b:to_scalar())
@@ -350,7 +350,7 @@ describe("signed integer arithmetic", function()
 				a:set_scalar(i)
 
 				r:lshift(a, j)
-				assert.equal(trunc(i * 2 ^ j), r:to_scalar())
+				assert.equal(truncate(i * 2 ^ j), r:to_scalar())
 
 				assert.equal(i, a:to_scalar())
 			end)
@@ -359,7 +359,7 @@ describe("signed integer arithmetic", function()
 				a:set_scalar(i)
 
 				r:rshift(a, j)
-				assert.equal(trunc(i / 2 ^ j), r:to_scalar())
+				assert.equal(truncate(i / 2 ^ j), r:to_scalar())
 
 				assert.equal(i, a:to_scalar())
 			end)
