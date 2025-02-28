@@ -5,6 +5,7 @@ if not has_bit then
 end
 
 local band, bor, bxor, lshift, rshift = bit.band, bit.bor, bit.bxor, bit.lshift, bit.rshift
+local byte = string.byte
 
 local WORD_SIZE = 8
 local WORD_RADIX = 2 ^ WORD_SIZE
@@ -90,6 +91,7 @@ local function subMulWithOverflow(a, b, c, borrow)
 	return z0, i1 + k1 + j1
 end
 
+-- returns the largest index `i` such that `r[r_i + i + 1] == 0` and `r[r_i + i] ~= 0`
 local function limb_normalize(r, r_i, r_n)
 	while r_n > 0 and r[r_i + r_n - 1] == 0 do
 		r_n = r_n - 1
@@ -98,6 +100,7 @@ local function limb_normalize(r, r_i, r_n)
 	return r_n
 end
 
+-- returns a number with the same sign as the difference between `a[a_i:a_n]` and `b[b_i:b_n]`
 local function limb_compare(a, a_i, a_n, b, b_i, b_n)
 	if a_n ~= b_n then
 		return a_n - b_n
@@ -115,6 +118,7 @@ local function limb_compare(a, a_i, a_n, b, b_i, b_n)
 	return 0
 end
 
+-- returns a number with the same sign as the difference between `a[a_i:a_n]` and `w`
 local function limb_compare_scalar(a, a_i, a_n, w)
 	if a_n > 1 then
 		return a_n
@@ -128,24 +132,16 @@ local function limb_compare_scalar(a, a_i, a_n, w)
 	return a_k - w
 end
 
+-- `r[r_i+b_n:] = a[a_i+a_b:a_n] + carry`
 local function limb_add_propagate(r, r_i, a, a_i, a_n, b_n, carry)
 	for i = b_n, a_n - 1 do
 		r[r_i + i], carry = addWithOverflow(a[a_i + i], carry, 0)
 	end
 
-	return carry
+	r[r_i + a_n] = carry
 end
 
-local function limb_add_carry(r, r_i, a, a_i, a_n, b, b_i, b_n)
-	local carry = 0
-
-	for i = 0, b_n - 1 do
-		r[r_i + i], carry = addWithOverflow(a[a_i + i], b[b_i + i], carry)
-	end
-
-	return limb_add_propagate(r, r_i, a, a_i, a_n, b_n, carry)
-end
-
+-- `r[r_i:] = a[a_i:a_n] + b[b_i:b_n]`
 local function limb_add_full(r, r_i, a, a_i, a_n, b, b_i, b_n)
 	if b_n > a_n then
 		a, a_i, a_n, b, b_i, b_n = b, b_i, b_n, a, a_i, a_n
@@ -160,34 +156,55 @@ local function limb_add_full(r, r_i, a, a_i, a_n, b, b_i, b_n)
 		return
 	end
 
-	r[r_i + a_n] = limb_add_carry(r, r_i, a, a_i, a_n, b, b_i, b_n)
+	local carry = 0
+
+	for i = 0, b_n - 1 do
+		r[r_i + i], carry = addWithOverflow(a[a_i + i], b[b_i + i], carry)
+	end
+
+	limb_add_propagate(r, r_i, a, a_i, a_n, b_n, carry)
 end
 
+-- `r[r_i+b_n:] = a[a_i+a_b:a_n] - borrow`
+-- asserts that the subtraction would not underflow
 local function limb_sub_propagate(r, r_i, a, a_i, a_n, b_n, borrow)
 	for i = b_n, a_n - 1 do
 		r[r_i + i], borrow = subWithOverflow(a[a_i + i], borrow, 0)
 	end
 
-	return borrow
+	assert(borrow == 0, "subtraction underflow")
 end
 
-local function limb_sub_carry(r, r_i, a, a_i, a_n, b, b_i, b_n)
+-- `r[r_i:] = a[a_i:a_n] + b[b_i:b_n]`
+-- asserts that `a[a_i:a_n] >= b[b_i:b_n]`
+local function limb_sub_full(r, r_i, a, a_i, a_n, b, b_i, b_n)
 	local borrow = 0
 
 	for i = 0, b_n - 1 do
 		r[r_i + i], borrow = subWithOverflow(a[a_i + i], b[b_i + i], borrow)
 	end
 
-	return limb_sub_propagate(r, r_i, a, a_i, a_n, b_n, borrow)
+	limb_sub_propagate(r, r_i, a, a_i, a_n, b_n, borrow)
 end
 
-local function limb_sub_full(r, r_i, a, a_i, a_n, b, b_i, b_n)
-	local borrow = limb_sub_carry(r, r_i, a, a_i, a_n, b, b_i, b_n)
-	assert(borrow == 0, "subtraction underflow")
+-- `r[r_i:] = a[a_i:a_n] * w`
+local function limb_mul_scalar(r, r_i, a, a_i, a_n, w)
+	local carry = 0
+
+	for i = 0, a_n - 1 do
+		r[r_i + i], carry = addMulWithOverflow(0, a[a_i + i], w, carry)
+	end
+
+	if carry == 0 then
+		return a_n
+	end
+
+	r[r_i + a_n] = carry
+	return a_n + 1
 end
 
+-- `r[r_i:] += a[a_i:a_n] * w`
 local function limb_mul_add_scalar(r, r_i, a, a_i, a_n, w)
-	assert(not rawequal(r, a), "in-place multiplication not supported")
 	local carry = 0
 
 	for i = 0, a_n - 1 do
@@ -201,8 +218,9 @@ local function limb_mul_add_scalar(r, r_i, a, a_i, a_n, w)
 	end
 end
 
+-- `r[r_i:] -= a[a_i:a_n] * w`
+-- asserts that `r[r_i:] >= a[a_i:a_n] * w`
 local function limb_mul_sub_scalar(r, r_i, a, a_i, a_n, w)
-	assert(not rawequal(r, a), "in-place multiplication not supported")
 	local borrow = 0
 
 	for i = 0, a_n - 1 do
@@ -215,7 +233,7 @@ local function limb_mul_sub_scalar(r, r_i, a, a_i, a_n, w)
 		i = i + 1
 	end
 
-	return borrow ~= 0
+	assert(borrow == 0, "subtraction underflow")
 end
 
 local function limb_mul_add_long(r, r_i, a, a_i, a_n, b, b_i, b_n)
@@ -232,12 +250,12 @@ local function limb_mul_sub_long(r, r_i, a, a_i, a_n, b, b_i, b_n)
 	assert(not rawequal(r, b), "in-place multiplication not supported")
 
 	for i = 0, b_n - 1 do
-		local underflow = limb_mul_sub_scalar(r, r_i + i, a, a_i, a_n, b[b_i + i])
-		assert(not underflow, "subtraction underflow")
+		limb_mul_sub_scalar(r, r_i + i, a, a_i, a_n, b[b_i + i])
 	end
 end
 
 local limb_mul_add_karatsuba
+-- `r[r_i:] += a[a_i:a_n] * b[b_i:b_n]`
 local function limb_mul_add(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 	if b_n > a_n then
 		a, a_i, a_n, b, b_i, b_n = b, b_i, b_n, a, a_i, a_n
@@ -251,6 +269,7 @@ local function limb_mul_add(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 end
 
 local limb_mul_sub_karatsuba
+-- `r[r_i:] -= a[a_i:a_n] * b[b_i:b_n]`
 local function limb_mul_sub(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 	if b_n > a_n then
 		a, a_i, a_n, b, b_i, b_n = b, b_i, b_n, a, a_i, a_n
@@ -471,6 +490,7 @@ function limb_mul_sub_karatsuba(r, r_i, r_n, a, a_i, a_n, b, b_i, b_n)
 	end
 end
 
+-- `r[r_i:] = a[a_i:a_n] << shift`
 local function limb_lshift(r, a, a_n, shift)
 	local interior_shift = shift % WORD_SIZE
 	local limb_shift = math.floor(shift / WORD_SIZE)
@@ -505,6 +525,7 @@ local function limb_lshift(r, a, a_n, shift)
 	return limb_shift + a_n + 1
 end
 
+-- `r[r_i:] = a[a_i:a_n] >> shift`
 local function limb_rshift(r, a, a_n, shift)
 	local interior_shift = shift % WORD_SIZE
 	local limb_shift = math.floor(shift / WORD_SIZE)
@@ -531,24 +552,30 @@ local function limb_rshift(r, a, a_n, shift)
 	return a_n - limb_shift
 end
 
---- @class bignum.integer
---- @field limbs integer[]
---- @field n integer number of limbs
---- @field positive boolean
+---@class bignum.integer
+---@field limbs integer[]
+---@field n integer number of limbs
+---@field positive boolean
 local Integer = {}
 Integer.__index = Integer
 
+--- Returns a new integer with an initial value of zero.
 ---@return bignum.integer
 function Integer.new_zero()
 	return setmetatable({ limbs = {}, n = 0, positive = true }, Integer)
 end
 
+--- Copies the magnitude of integer `a` into integer `r` and returns `r`.
+--- Does not modify the sign of `r`.
 ---@param r bignum.integer
 ---@param a bignum.integer
 ---@return bignum.integer
 function Integer.ucopy(r, a)
-	r.n = a.n
+	if rawequal(r, a) then
+		return r
+	end
 
+	r.n = a.n
 	for i = 1, a.n do
 		r.limbs[i] = a.limbs[i]
 	end
@@ -556,6 +583,7 @@ function Integer.ucopy(r, a)
 	return r
 end
 
+--- Copies the value of integer `a` into integer `r` and returns `r`.
 ---@param r bignum.integer
 ---@param a bignum.integer
 ---@return bignum.integer
@@ -564,12 +592,14 @@ function Integer.copy(r, a)
 	return Integer.ucopy(r, a)
 end
 
+--- Returns a new integer with the same value as `a`.
 ---@param a bignum.integer
 ---@return bignum.integer
 function Integer.dup(a)
 	return Integer.copy(Integer.new_zero(), a)
 end
 
+--- Sets the value of integer `r` to the value of scalar `w` and returns `r`.
 ---@param r bignum.integer
 ---@param w integer
 ---@return bignum.integer
@@ -596,6 +626,117 @@ function Integer.set_scalar(r, w)
 	return r
 end
 
+local tbl_char2digit = {}
+for c = 0, 255 do
+	if c >= 48 and c <= 57 then
+		tbl_char2digit[c + 1] = c - 48
+	elseif c >= 65 and c <= 90 then
+		tbl_char2digit[c + 1] = c - 55
+	elseif c >= 97 and c <= 122 then
+		tbl_char2digit[c + 1] = c - 87
+	else
+		tbl_char2digit[c + 1] = false
+	end
+end
+
+---@param r bignum.integer
+---@param str string
+---@param base? integer
+---@return bignum.integer
+function Integer.set_string(r, str, base)
+	local positive = true
+	r.n = 0
+
+	local i = 1
+	if str:sub(i, i) == "-" then
+		positive = false
+		i = i + 1
+	elseif str:sub(i, i) == "+" then
+		i = i + 1
+	end
+
+	base = base or 10
+	local prefix = str:sub(i, i + 1)
+	if (prefix == "0x" or prefix == "0X") and (base == 16 or base == 10) then
+		i = i + 2
+		base = 16
+	elseif (prefix == "0o" or prefix == "0O") and (base == 8 or base == 10) then
+		i = i + 2
+		base = 8
+	elseif (prefix == "0b" or prefix == "0B") and (base == 2 or base == 10) then
+		i = i + 2
+		base = 2
+	end
+
+	local len = #str
+	if i > len then
+		return r
+	end
+
+	local has_exponent = false
+	while i <= len do
+		local digit = tbl_char2digit[byte(str, i) + 1]
+		if not digit then
+			error("invalid character '" .. str:sub(i, i) .. "'")
+		end
+
+		if digit >= base then
+			if base == 10 and digit == 14 or base == 16 and digit == 25 then
+				-- exponent E in base 10 or P in base 16
+
+				i = i + 1
+				has_exponent = true
+				break
+			end
+
+			error("invalid character '" .. str:sub(i, i) .. "'")
+		end
+
+		-- r = r * base + digit
+		Integer.umul_scalar(r, r, base)
+		Integer.uadd_scalar(r, r, digit)
+
+		i = i + 1
+	end
+
+	r.positive = positive
+	if has_exponent then
+		local exponent = Integer.new_zero()
+
+		local e_positive = true
+		if str:sub(i, i) == "-" then
+			e_positive = false
+			i = i + 1
+		elseif str:sub(i, i) == "+" then
+			i = i + 1
+		end
+
+		while i <= len do
+			local digit = tbl_char2digit[byte(str, i) + 1]
+			if not digit or digit >= 10 then
+				error("invalid character '" .. str:sub(i, i) .. "'")
+			end
+
+			-- e = e * base + digit
+			Integer.umul_scalar(exponent, exponent, 10)
+			Integer.uadd_scalar(exponent, exponent, digit)
+
+			i = i + 1
+		end
+
+		exponent.positive = e_positive
+		local tmp = Integer.new_zero()
+		local r_copy = Integer.dup(r)
+		local base_i = Integer.from_scalar(base == 16 and 2 or 10)
+
+		-- r = r * base^exponent
+		Integer.upow(tmp, base_i, exponent)
+		Integer.mul(r, r_copy, tmp)
+	end
+
+	return r
+end
+
 ---@param w integer
 ---@return bignum.integer
 function Integer.from_scalar(w)
@@ -607,7 +748,7 @@ end
 ---@param base? integer
 ---@return bignum.integer
 function Integer.from_string(str, base)
-	base = base or 10
+	return Integer.set_string(Integer.new_zero(), str, base)
 end
 
 ---@param a bignum.integer
@@ -643,7 +784,13 @@ end
 ---@param a bignum.integer
 ---@return boolean
 function Integer.is_zero(a)
-	return a.n == 0
+	for i = a.n, 1, -1 do
+		if a.limbs[i] ~= 0 then
+			return false
+		end
+	end
+
+	return true
 end
 
 ---@param a bignum.integer
@@ -792,7 +939,9 @@ end
 function Integer.uadd_scalar(r, a, w)
 	w = math.floor(math.abs(w))
 
-	if w < WORD_RADIX then
+	if w == 0 then
+		return Integer.ucopy(r, a)
+	elseif w < WORD_RADIX then
 		limb_add_propagate(r.limbs, 1, a.limbs, 1, a.n, 0, w)
 		r.n = limb_normalize(r.limbs, 1, a.n + 1)
 		return r
@@ -811,9 +960,10 @@ end
 function Integer.usub_scalar(r, a, w)
 	w = math.floor(math.abs(w))
 
-	if w < WORD_RADIX then
-		local borrow = limb_sub_propagate(r.limbs, 1, a.limbs, 1, a.n, 0, w)
-		assert(borrow == 0, "subtraction underflow")
+	if w == 0 then
+		return Integer.ucopy(r, a)
+	elseif w < WORD_RADIX then
+		limb_sub_propagate(r.limbs, 1, a.limbs, 1, a.n, 0, w)
 		r.n = limb_normalize(r.limbs, 1, a.n)
 		return r
 	end
@@ -1007,12 +1157,8 @@ function Integer.umul_scalar(r, a, w)
 	end
 
 	if w < WORD_RADIX then
-		for i = 1, a.n + 1 do
-			r.limbs[i] = 0
-		end
-
-		limb_mul_add_scalar(r.limbs, 1, a.limbs, 1, a.n, w)
-		r.n = limb_normalize(r.limbs, 1, a.n + 1)
+		local n = limb_mul_scalar(r.limbs, 1, a.limbs, 1, a.n, w)
+		r.n = limb_normalize(r.limbs, 1, n)
 		return r
 	end
 
@@ -1038,6 +1184,10 @@ function Integer.upow(r, a, b)
 		return r
 	elseif b.n == 1 then
 		return Integer.upow_scalar(r, a, b.limbs[1])
+    elseif a.n == 0 then
+		r.positive = true
+		r.n = 0
+		return r
 	end
 
 	r.n = 1
@@ -1088,13 +1238,13 @@ function Integer.upow_scalar(r, a, w)
 		r.n = 1
 		r.limbs[1] = 1
 		return r
-	end
-
-	if w == 1 then
+    elseif a.n == 0 then
+        r.positive = true
+        r.n = 0
+		return r
+	elseif w == 1 then
 		return Integer.ucopy(r, a)
-	end
-
-	if w == 2 then
+	elseif w == 2 then
 		return Integer.umul(r, a, a)
 	end
 

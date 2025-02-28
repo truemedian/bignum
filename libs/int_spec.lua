@@ -1,8 +1,15 @@
+if args then
+    _G.arg = args
+    table.remove(args, 1)
+end
+
+require("busted.runner")()
+
 local Integer = require("int")
 
 local bit = require("bit")
 
-local LIMIT = 20
+local LIMIT = 10
 local function truncate(n)
 	if n >= 0 then
 		return math.floor(n)
@@ -32,12 +39,63 @@ describe("integer creation", function()
 		assert.are.equal(0, int:to_scalar())
 	end)
 
-	it("should set an integer to a new scalar", function()
+	it("should create an Integer from string", function()
+		local int = Integer.from_string("500")
+		assert.are.equal(500, int:to_scalar())
+
+		int = Integer.from_string("-300")
+		assert.are.equal(-300, int:to_scalar())
+
+		int = Integer.from_string("0")
+		assert.are.equal(0, int:to_scalar())
+
+		int = Integer.from_string("0o111")
+		assert.are.equal(73, int:to_scalar())
+	end)
+
+	it("should set an Integer to a new scalar", function()
 		local int = Integer.from_scalar(150)
 		int:set_scalar(-10)
 		assert.are.equal(-10, int:to_scalar())
 		int:set_scalar(1000)
 		assert.are.equal(1000, int:to_scalar())
+	end)
+
+	it("should set an Integer from string", function()
+		local int = Integer.new_zero()
+
+		int:set_string("500")
+		assert.are.equal(500, int:to_scalar())
+
+		int:set_string("500", 16)
+		assert.are.equal(0x500, int:to_scalar())
+
+		int:set_string("500", 36)
+		assert.are.equal(6480, int:to_scalar())
+
+		int:set_string("-300")
+		assert.are.equal(-300, int:to_scalar())
+
+		int:set_string("0")
+		assert.are.equal(0, int:to_scalar())
+
+		int:set_string("12345678901234567890")
+		assert.are.equal(12345678901234567890, int:to_scalar())
+
+		int:set_string("-0x1F4")
+		assert.are.equal(-0x1F4, int:to_scalar())
+
+		int:set_string("0o111")
+		assert.are.equal(73, int:to_scalar())
+
+		int:set_string("111", 8)
+		assert.are.equal(73, int:to_scalar())
+
+		int:set_string("-0b111")
+		assert.are.equal(-7, int:to_scalar())
+
+		int:set_string("-111", 2)
+		assert.are.equal(-7, int:to_scalar())
 	end)
 end)
 

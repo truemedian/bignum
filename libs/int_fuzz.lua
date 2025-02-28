@@ -1,34 +1,43 @@
-local luzer = require("luzer")
 local Integer = require("int")
+local fuzzer = require("aflua")
 
 local function check(buf)
-	local a = Integer.new_zero()
-	local b = Integer.new_zero()
+	if buf:find("[^0-9a-zA-Z]") then
+		fuzzer.skip()
+		return
+	end
+
 	local r = Integer.new_zero()
+    for base = 2, 36 do
+        local expect = tonumber(buf, base)
+        if expect and math.abs(expect) < 2 ^ 50 then
+            r:set_string(buf, base)
+            local actual = r:to_scalar()
 
-	local fdp = luzer.FuzzedDataProvider(buf)
-	a.positive = fdp:consume_boolean()
-	b.positive = fdp:consume_boolean()
+            if actual ~= expect then
+                print("buf", buf)
+                print("base", base)
+                print("expect", expect)
+                print("actual", actual)
+                error('failed')
+            end
+        end
+    end
 
-	a.n = fdp:consume_integer(4, 256)
-	b.n = fdp:consume_integer(4, 256)
+	local expect = tonumber(buf)
+    if expect and math.abs(expect) < 2 ^ 50 then
+		r:set_string(buf)
+		local actual = r:to_scalar()
 
-	for i = 1, a.n do
-		a.limbs[i] = fdp:consume_integer(0, 255)
+		if actual ~= expect then
+			print("buf", buf)
+			print("expect", expect)
+			print("actual", actual)
+			error('failed')
+		end
 	end
-
-	for i = 1, b.n do
-		b.limbs[i] = fdp:consume_integer(0, 255)
-	end
-
-	a:normalize()
-	b:normalize()
-
-	r:add(a, b)
-	r:sub(a, b)
-	r:mul(a, b)
 end
 
-luzer.Fuzz(function(buf)
-	check(buf)
-end, nil, {})
+fuzzer.init()
+fuzzer.coverage_hook(true)
+fuzzer.run(check)
