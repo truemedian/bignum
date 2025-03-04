@@ -201,7 +201,7 @@ local function check_sub(buf)
 
 	if y > x then
 		r, s = s, r
-        x, y = y, x
+		x, y = y, x
 
 		t:usub(r, r)
 		assert(t:to_scalar() == x - x)
@@ -211,14 +211,14 @@ local function check_sub(buf)
 			assert(t:to_scalar() == x - x - x)
 		end
 
-        t:usub(r, s)
+		t:usub(r, s)
 		assert(t:to_scalar() == x - y)
 
 		t:usub_scalar(r, y)
 		assert(t:to_scalar() == x - y)
 
 		r, s = s, r
-        x, y = y, x
+		x, y = y, x
 	end
 
 	t:sub(r, s)
@@ -300,8 +300,46 @@ local function check_mul(buf)
 	assert(t:to_scalar() == a * b)
 end
 
+local function check_div(buf)
+	local a = fuzzer.consume_integer(-2 ^ 46, 2 ^ 46)
+    local b = fuzzer.consume_integer(-2 ^ 46, 2 ^ 46)
+
+	local x = math.abs(a)
+	local y = math.abs(b)
+
+	local q = Integer.new_zero()
+	local r = Integer.new_zero()
+	local s = Integer.from_scalar(a)
+	local t = Integer.from_scalar(b)
+
+	q:udiv(r, s, t)
+	assert(q:to_scalar() == math.floor(x / y))
+	assert(r:to_scalar() == math.floor(x % y))
+
+	assert(s:to_scalar() == a)
+	assert(t:to_scalar() == b)
+
+	q:udiv_scalar(r, s, y)
+	assert(q:to_scalar() == math.floor(x / y))
+	assert(r:to_scalar() == math.floor(x % y))
+
+	assert(s:to_scalar() == a)
+	assert(t:to_scalar() == b)
+
+	q:udiv_scalar(r, s, x)
+	assert(q:to_scalar() == 1)
+	assert(r:to_scalar() == 0)
+
+	assert(s:to_scalar() == a)
+	assert(t:to_scalar() == b)
+
+	q:udiv_scalar(r, s, 1)
+	assert(q:to_scalar() == x)
+	assert(r:to_scalar() == 0)
+end
+
 local function check_all(buf)
-	local choice = fuzzer.consume_integer(0, 6)
+	local choice = fuzzer.consume_integer(0, 7)
 
 	if choice == 0 then
 		check_from_scalar(buf)
@@ -314,12 +352,16 @@ local function check_all(buf)
 	elseif choice == 4 then
 		check_add(buf)
 	elseif choice == 5 then
-        check_sub(buf)
-    elseif choice == 6 then
-        check_mul(buf)
+		check_sub(buf)
+	elseif choice == 6 then
+		check_mul(buf)
+	elseif choice == 7 then
+		check_div(buf)
 	end
 end
 
 fuzzer.init()
-fuzzer.coverage_hook(true)
-fuzzer.run(check_all, 10000, debug.traceback)
+-- fuzzer.coverage_hook(true, 1)
+fuzzer.run(check_div, 10000, debug.traceback)
+
+-- ls -1 * 

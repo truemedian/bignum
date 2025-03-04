@@ -7,7 +7,7 @@ end
 local band, bor, bxor, lshift, rshift = bit.band, bit.bor, bit.bxor, bit.lshift, bit.rshift
 local byte = string.byte
 
-local WORD_SIZE = 8
+local WORD_SIZE = 4
 local WORD_RADIX = 2 ^ WORD_SIZE
 local WORD_MASK = 2 ^ WORD_SIZE - 1
 
@@ -526,30 +526,77 @@ local function limb_lshift(r, a, a_n, shift)
 end
 
 -- `r[r_i:] = a[a_i:a_n] >> shift`
-local function limb_rshift(r, a, a_n, shift)
+local function limb_rshift(r, r_i, a, a_i, a_n, shift)
 	local interior_shift = shift % WORD_SIZE
 	local limb_shift = math.floor(shift / WORD_SIZE)
 
 	if interior_shift == 0 then
 		-- optimization for whole limb shifts
-		for i = 1, a_n - limb_shift do
-			r[i] = a[i + limb_shift]
+		for i = 0, a_n - limb_shift - 1 do
+			r[r_i + i] = a[a_i + i + limb_shift]
 		end
 
 		return a_n - limb_shift
 	end
 
-	a[a_n + 1] = 0 -- ensure we don't read out of bounds
+	a[a_i + a_n] = 0 -- ensure we don't read out of bounds
 	for dst_i = 1, a_n - limb_shift do
 		local src_i = dst_i + limb_shift
 
-		local src_digit = a[src_i] or 0
-		local src_digit_next = a[src_i + 1] or 0
+		local src_digit = a[a_i + src_i - 1] or 0
+		local src_digit_next = a[a_i + src_i] or 0
 		local carry = band(lshift(src_digit_next, WORD_SIZE - interior_shift), WORD_MASK)
-		r[dst_i] = bor(rshift(src_digit, interior_shift), carry)
+		r[r_i + dst_i - 1] = bor(rshift(src_digit, interior_shift), carry)
 	end
 
 	return a_n - limb_shift
+end
+
+-- `q[1:] = r[r_i:r_n] / w rem r[r_i]`
+local function limb_div_scalar(q, q_i, r, r_i, r_n, d_w)
+	assert(d_w > 0)
+
+	local cmp = limb_compare_scalar(r, r_i, r_n, d_w)
+	if cmp < 0 then
+		return 0, r_n
+	elseif cmp == 0 then
+		q[q_i] = 1
+		return 1, 0
+	elseif d_w == 1 then
+		for i = 0, r_n - 1 do
+			q[q_i + i] = r[r_i + i]
+		end
+		return r_n, 0
+	end
+
+	if band(d_w, d_w - 1) == 0 then
+		local sh_amt = ctz(d_w)
+
+		local q_n = limb_rshift(q, q_i, r, r_i, r_n, sh_amt)
+		r[r_i] = band(r[r_i], d_w - 1)
+		return q_n, 1
+	end
+
+	local remainder = 0
+	for i = r_n - 1, 0, -1 do
+		local pdiv = remainder * WORD_RADIX + r[r_i + i]
+		if pdiv == 0 then
+			q[q_i + i] = 0
+			remainder = 0
+		elseif pdiv < d_w then
+			q[q_i + i] = 0
+			remainder = pdiv
+		elseif pdiv == d_w then
+			q[q_i + i] = 1
+			remainder = 0
+		else
+			q[q_i + i] = band(math.floor(pdiv / d_w), WORD_MASK)
+			remainder = band(pdiv % d_w, WORD_MASK)
+		end
+	end
+
+	r[r_i] = remainder
+	return limb_normalize(q, q_i, r_n), remainder == 0 and 0 or 1
 end
 
 ---@class bignum.integer
@@ -755,6 +802,7 @@ end
 ---@return integer
 function Integer.to_scalar(a)
 	local w = 0
+	
 	for i = a.n, 1, -1 do
 		w = w * WORD_RADIX + a.limbs[i]
 	end
@@ -1163,6 +1211,10 @@ function Integer.umul_scalar(r, a, w)
 	end
 
 	local b = Integer.from_scalar(w)
+	if rawequal(r.limbs, a.limbs) then
+		a = Integer.dup(a)
+	end
+
 	return Integer.umul(r, a, b)
 end
 
@@ -1328,7 +1380,7 @@ function Integer.urshift(r, a, sh_amt)
 		return Integer.ulshift(r, a, -sh_amt)
 	end
 
-	r.n = limb_rshift(r.limbs, a.limbs, a.n, sh_amt)
+	r.n = limb_rshift(r.limbs, 1, a.limbs, 1, a.n, sh_amt)
 	return r
 end
 
@@ -1477,31 +1529,38 @@ function Integer.udiv(q, r, n, d)
 	n = Integer.dup(n)
 	local d_w = d.limbs[d.n]
 
-	local q_hat = Integer.new_zero()
-	local r_hat = Integer.new_zero()
-
-	for i = n.n, 1, -1 do
-		for j = r.n, 1, -1 do
-			r.limbs[j + 1] = r.limbs[j]
-		end
-		r.limbs[1] = n.limbs[i]
-		r.n = r.n + 1
-
-		if Integer.ucmp(r, d) >= 0 then
-			Integer.udiv_scalar(q_hat, r_hat, r, d_w)
-			if q_hat.n > 0 then
-				assert(q_hat.n == 1)
-				local q_k = q_hat.limbs[1]
-
-				q.limbs[i] = q_k
-
-				Integer.umul_scalar(r_hat, r, q_k)
-				Integer.usub(r, r, r_hat)
-			end
-		end
+	-- load r with the highest d.n limbs of n
+	for i = 1, d.n - 1 do
+		r.limbs[i] = n.limbs[i + n.n - d.n + 1]
 	end
 
-	q.n = limb_normalize(q.limbs, 1, n.n)
+	local q_n = n.n - d.n + 1
+	r.n = 0
+
+	local q_hat = Integer.new_zero()
+	for i = 1, q_n do
+		q.limbs[i] = 0
+	end
+
+	for i = q_n, 1, -1 do
+		-- add the next digit of n to r
+		r.n = r.n + 1
+		limb_lshift(r.limbs, r.limbs, r.n + d.n, WORD_SIZE)
+		r.limbs[1] = n.limbs[i]
+
+		local qk_n
+		qk_n, r.n = limb_div_scalar(q_hat.limbs, 1, r.limbs, d.n, r.n, d_w)
+		if qk_n == 1 then
+			q.limbs[i] = q_hat.limbs[1]
+		else
+			assert(qk_n == 0)
+		end
+
+        limb_mul_sub_scalar(r.limbs, 1, d.limbs, 1, d.n - 1, q.limbs[i])
+	end
+
+	r.n = r.n + d.n - 1
+	q.n = limb_normalize(q.limbs, 1, q_n)
 	return q, r
 end
 
@@ -1510,52 +1569,15 @@ function Integer.udiv_scalar(q, r, n, d_w)
 		error("division by zero")
 	end
 
-	local ucmp_nd = Integer.ucmp_scalar(n, d_w)
-	if ucmp_nd < 0 then
-		q.n = 0
-		Integer.ucopy(r, n)
-		return q, r
-	elseif ucmp_nd == 0 then
-		q.n = 1
-		q.limbs[1] = 1
-		r.n = 0
-		return q, r
+	if d_w >= WORD_RADIX then
+		local d = Integer.from_scalar(d_w)
+		return Integer.udiv(q, r, n, d)
 	end
 
-	-- perform the division
-	if d_w < 2 ^ 32 and band(d_w, d_w - 1) == 0 then
-		local sh_amt = ctz(d_w)
+	Integer.copy(r, n)
 
-		Integer.urshift(q, n, sh_amt)
-		Integer.uband_scalar(r, n, d_w - 1)
-
-		return q, r
-	elseif d_w < WORD_RADIX then
-		local remainder = 0
-		for i = n.n, 1, -1 do
-			local pdiv = remainder * WORD_RADIX + n.limbs[i]
-			if pdiv == 0 then
-				q.limbs[i] = 0
-				remainder = 0
-			elseif pdiv < d_w then
-				q.limbs[i] = 0
-				remainder = pdiv
-			elseif pdiv == d_w then
-				q.limbs[i] = 1
-				remainder = 0
-			else
-				q.limbs[i] = band(math.floor(pdiv / d_w), WORD_MASK)
-				remainder = band(pdiv % d_w, WORD_MASK)
-			end
-		end
-
-		q.n = limb_normalize(q.limbs, 1, n.n)
-		Integer.set_scalar(r, remainder)
-		return q, r
-	end
-
-	local d = Integer.from_scalar(d_w)
-	return Integer.udiv(q, r, n, d)
+	q.n, r.n = limb_div_scalar(q.limbs, 1, r.limbs, 1, r.n, d_w)
+	return q, r
 end
 
 return Integer
