@@ -1184,7 +1184,7 @@ function Integer.upow(r, a, b)
 		return r
 	elseif b.n == 1 then
 		return Integer.upow_scalar(r, a, b.limbs[1])
-    elseif a.n == 0 then
+	elseif a.n == 0 then
 		r.positive = true
 		r.n = 0
 		return r
@@ -1238,9 +1238,9 @@ function Integer.upow_scalar(r, a, w)
 		r.n = 1
 		r.limbs[1] = 1
 		return r
-    elseif a.n == 0 then
-        r.positive = true
-        r.n = 0
+	elseif a.n == 0 then
+		r.positive = true
+		r.n = 0
 		return r
 	elseif w == 1 then
 		return Integer.ucopy(r, a)
@@ -1355,6 +1355,19 @@ function Integer.uband(r, a, b)
 	return r
 end
 
+function Integer.uband_scalar(r, a, w)
+	w = math.floor(math.abs(w))
+
+	if a.n == 0 then
+		r.n = 0
+		return r
+	end
+
+	r.n = 1
+	r.limbs[1] = band(a.limbs[1], w)
+	return r
+end
+
 function Integer.ubor(r, a, b)
 	if a.n < b.n then
 		a, b = b, a
@@ -1369,6 +1382,28 @@ function Integer.ubor(r, a, b)
 		r.limbs[i] = a.limbs[i]
 	end
 
+	return r
+end
+
+function Integer.ubor_scalar(r, a, w)
+	w = math.floor(math.abs(w))
+
+	if a.n == 0 then
+		if w == 0 then
+			r.n = 0
+			return r
+		end
+
+		r.n = 1
+		r.limbs[1] = w
+		return r
+	end
+
+	r.n = a.n
+	r.limbs[1] = bor(a.limbs[1], w)
+	for i = 2, a.n do
+		r.limbs[i] = a.limbs[i]
+	end
 	return r
 end
 
@@ -1387,6 +1422,140 @@ function Integer.ubxor(r, a, b)
 	end
 
 	return r
+end
+
+function Integer.ubxor_scalar(r, a, w)
+	w = math.floor(math.abs(w))
+
+	if a.n == 0 then
+		if w == 0 then
+			r.n = 0
+			return r
+		end
+
+		r.n = 1
+		r.limbs[1] = w
+		return r
+	end
+
+	r.n = a.n
+	r.limbs[1] = bxor(a.limbs[1], w)
+	for i = 2, a.n do
+		r.limbs[i] = a.limbs[i]
+	end
+	return r
+end
+
+function Integer.udiv(q, r, n, d)
+	if d.n == 0 then
+		error("division by zero")
+	end
+
+	if n == 0 then
+		q.n = 0
+		r.n = 0
+		return q, r
+	end
+
+	local ucmp_nd = Integer.ucmp(n, d)
+	if ucmp_nd < 0 then
+		q.n = 0
+		Integer.ucopy(r, n)
+		return q, r
+	elseif ucmp_nd == 0 then
+		q.n = 1
+		q.limbs[1] = 1
+		r.n = 0
+		return q, r
+	elseif d.n == 1 then
+		return Integer.udiv_scalar(q, r, n, d.limbs[1])
+	end
+
+	q.n = 0
+	r.n = 0
+
+	n = Integer.dup(n)
+	local d_w = d.limbs[d.n]
+
+	local q_hat = Integer.new_zero()
+	local r_hat = Integer.new_zero()
+
+	for i = n.n, 1, -1 do
+		for j = r.n, 1, -1 do
+			r.limbs[j + 1] = r.limbs[j]
+		end
+		r.limbs[1] = n.limbs[i]
+		r.n = r.n + 1
+
+		if Integer.ucmp(r, d) >= 0 then
+			Integer.udiv_scalar(q_hat, r_hat, r, d_w)
+			if q_hat.n > 0 then
+				assert(q_hat.n == 1)
+				local q_k = q_hat.limbs[1]
+
+				q.limbs[i] = q_k
+
+				Integer.umul_scalar(r_hat, r, q_k)
+				Integer.usub(r, r, r_hat)
+			end
+		end
+	end
+
+	q.n = limb_normalize(q.limbs, 1, n.n)
+	return q, r
+end
+
+function Integer.udiv_scalar(q, r, n, d_w)
+	if d_w == 0 then
+		error("division by zero")
+	end
+
+	local ucmp_nd = Integer.ucmp_scalar(n, d_w)
+	if ucmp_nd < 0 then
+		q.n = 0
+		Integer.ucopy(r, n)
+		return q, r
+	elseif ucmp_nd == 0 then
+		q.n = 1
+		q.limbs[1] = 1
+		r.n = 0
+		return q, r
+	end
+
+	-- perform the division
+	if d_w < 2 ^ 32 and band(d_w, d_w - 1) == 0 then
+		local sh_amt = ctz(d_w)
+
+		Integer.urshift(q, n, sh_amt)
+		Integer.uband_scalar(r, n, d_w - 1)
+
+		return q, r
+	elseif d_w < WORD_RADIX then
+		local remainder = 0
+		for i = n.n, 1, -1 do
+			local pdiv = remainder * WORD_RADIX + n.limbs[i]
+			if pdiv == 0 then
+				q.limbs[i] = 0
+				remainder = 0
+			elseif pdiv < d_w then
+				q.limbs[i] = 0
+				remainder = pdiv
+			elseif pdiv == d_w then
+				q.limbs[i] = 1
+				remainder = 0
+			else
+				q.limbs[i] = band(math.floor(pdiv / d_w), WORD_MASK)
+				remainder = band(pdiv % d_w, WORD_MASK)
+			end
+		end
+
+		q.n = limb_normalize(q.limbs, 1, n.n)
+		Integer.set_scalar(r, remainder)
+		return q, r
+	end
+
+	local d = Integer.from_scalar(d_w)
+	return Integer.udiv(q, r, n, d)
 end
 
 return Integer

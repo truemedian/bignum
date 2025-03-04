@@ -9,7 +9,7 @@ local Integer = require("int")
 
 local bit = require("bit")
 
-local LIMIT = 10
+local LIMIT = 20
 local function truncate(n)
 	if n >= 0 then
 		return math.floor(n)
@@ -207,6 +207,7 @@ describe("integer comparison", function()
 end)
 
 describe("unsigned integer arithmetic", function()
+	local q = Integer.new_zero()
 	local r = Integer.new_zero()
 	local a = Integer.new_zero()
 	local b = Integer.new_zero()
@@ -328,6 +329,24 @@ describe("unsigned integer arithmetic", function()
 
 				assert.equal(i, a:to_scalar())
 				assert.equal(j, b:to_scalar())
+			end)
+
+			it("should unsigned divide " .. i .. " by " .. j .. " correctly", function()
+				if j ~= 0 then
+					a:set_scalar(i)
+                    b:set_scalar(j)
+
+					q:udiv(r, a, b)
+                    assert.equal(math.floor(i / j), q:to_scalar())
+					assert.equal(math.floor(i % j), r:to_scalar())
+
+					q:udiv_scalar(r, a, j)
+					assert.equal(math.floor(i / j), q:to_scalar())
+					assert.equal(math.floor(i % j), r:to_scalar())
+
+					assert.equal(i, a:to_scalar())
+					assert.equal(j, b:to_scalar())
+				end
 			end)
 		end
 	end
