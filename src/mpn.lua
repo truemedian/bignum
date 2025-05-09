@@ -1022,8 +1022,13 @@ end
 ---@return mpn.limb
 ---@nodiscard
 function mpn.gcd_11(x, y)
-	assert(x >= y)
-	assert(y >= 0)
+	__validate_limb(x)
+	__validate_limb(y)
+	if y == 0 then
+		return x
+	elseif x == 0 then
+		return y
+	end
 
 	local g = 1
 	while band(x, 1) == 0 and band(y, 1) == 0 do
@@ -1085,6 +1090,16 @@ function mpn.gcd(r, r0, a, a0, an, b, b0, bn)
 	__validate_source(a, a0, an)
 	__validate_source(b, b0, bn)
 
+	if mpn.is_zero(b, b0, bn) then
+		mpn.copyi(r, r0, a, a0, an)
+		__validate_dest_suffix(r, r0, an)
+		return an
+	elseif mpn.is_zero(a, a0, an) then
+		mpn.copyi(r, r0, b, b0, bn)
+		__validate_dest_suffix(r, r0, bn)
+		return bn
+	end
+
 	local i, j = 0, 0
 	while band(a[a0 + 1], 1) == 0 do
 		mpn.rshift(a, a0, a, a0, an, 1)
@@ -1112,7 +1127,7 @@ function mpn.gcd(r, r0, a, a0, an, b, b0, bn)
 		if mpn.is_zero(b, b0, bn) then
 			mpn.lshift(r, r0, a, a0, an, k)
 			__validate_dest_suffix(r, r0, an)
-			return
+			return an
 		end
 
 		while band(b[b0 + 1], 1) == 0 do
@@ -1285,6 +1300,8 @@ function mpn.sqrtrem(r, r0, e, e0, s, s0, n)
 	__validate_dest_opt(e, e0, n)
 	__validate_source(s, s0, n)
 
+	n = mpn.normalized_size(s, s0, n)
+
 	-- naive binary search
 	local x0, x0n = {}, 0
 	local x1, x1n = {}, n
@@ -1445,28 +1462,29 @@ end
 ---@param idx mpn.size
 ---@param width mpn.size
 function mpn.bextract(r, r0, a, a0, n, idx, width)
-	__validate_dest(r, r0, n)
-	__validate_source(a, a0, n)
+    __validate_dest(r, r0, n)
+    __validate_source(a, a0, n)
 
-	local limb_offset = rshift(idx, LIMB_SIZE)
-	local inner_offset = band(idx, LIMB_MAX)
+    local limb_offset = rshift(idx, LIMB_SIZE)
+    local inner_offset = band(idx, LIMB_MAX)
 
-	local limb_width_max = ceil((width + inner_offset) / LIMB_SIZE)
-	local limb_width = ceil(width / LIMB_SIZE)
+    local limb_width_max = ceil((width + inner_offset) / LIMB_SIZE)
+    local limb_width = ceil(width / LIMB_SIZE)
+    local limb_high = ceil((width + 1) / LIMB_SIZE)
 
-	-- store the bits including any overflowed high bits in the result
-	mpn.rshift(r, r0, a, a0 + limb_offset, math.min(limb_width_max, n - limb_offset), inner_offset)
+    -- store the bits including any overflowed high bits in the result
+    mpn.rshift(r, r0, a, a0 + limb_offset, math.min(limb_width_max, n - limb_offset), inner_offset)
 
-	if limb_width_max ~= limb_width then
-		r[r0 + limb_width_max] = 0
-	end
+    if limb_width_max ~= limb_width then
+        r[r0 + limb_width_max] = 0
+    end
 
-	-- mask away the high bits we don't want
-	local high_mask = lshift(1, width % LIMB_SIZE) - 1
-	r[r0 + limb_width] = band(r[r0 + limb_width], high_mask)
+    -- mask away the high bits we don't want
+    local high_mask = lshift(1, width % LIMB_SIZE) - 1
+    r[r0 + limb_high] = band(r[r0 + limb_high], high_mask)
 
-	__validate_dest_suffix(r, r0, limb_width)
-	return limb_width
+    __validate_dest_suffix(r, r0, limb_width)
+    return limb_width
 end
 
 --- Computes `r[r0:n] = a[a0:n] & b[b0:n]`
@@ -1658,7 +1676,7 @@ function mpn.bscan0(a, a0, n)
 		local w = a[a0 + i]
 		if w ~= LIMB_MAX then
 			local idx = 0
-			while w > 0 do
+			while true do
 				if band(w, 1) == 0 then
 					return (i - 1) * LIMB_SIZE + idx
 				end
@@ -1700,8 +1718,8 @@ end
 ---@return mpn.bitcount
 ---@return mpn.bitcount
 function mpn.blimb(idx)
-	local index = rshift(idx, LIMB_SIZE) + 1
-	local offset = band(idx, LIMB_MAX)
+	local index = math.floor(idx / LIMB_SIZE) + 1
+	local offset = idx % LIMB_SIZE
 	return index, offset
 end
 

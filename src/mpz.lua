@@ -946,16 +946,16 @@ function mpz.btest(a, idx)
 	local sz_a = abs(sz_sgn_a)
 
 	local lmb, off = mpn.blimb(idx)
-    if sz_sgn_a <= 0 then
+	if sz_sgn_a < 0 then
 		if lmb > sz_a then
 			return true
 		end
 
 		-- twos complement negation has the effect of flipping all bits above the first 1 bit.
-        local flipped = mpn.bscan1(a, 0, lmb)
+		local flipped = mpn.bscan1(a, 0, lmb)
 		if idx >= flipped then
 			return band(a[lmb], lshift(1, off)) ~= 0
-        else
+		else
 			return band(a[lmb], lshift(1, off)) == 0
 		end
 	else
@@ -969,38 +969,123 @@ end
 
 --- Sets the bit at index `idx` to 1.
 ---@param a mpz
+---@param idx mpn.bitcount
 function mpz.bset(a, idx)
 	local sz_sgn_a = a[0]
 	local sz_a = abs(sz_sgn_a)
 
 	local lmb, off = mpn.blimb(idx)
+	if sz_sgn_a >= 0 then
+		if lmb > sz_a then
+			-- expand number to the new size
+			mpn.zero(a, sz_a, lmb - sz_a)
+			a[0] = lmb
+		end
+
+		-- set the bit
+		a[lmb] = bor(a[lmb], lshift(1, off))
+		return
+	end
+
+	-- twos complement logic for negative numbers.
 	if lmb > sz_a then
-		mpn.zero(a, sz_a, lmb - sz_a)
+		-- any bit above the highest limb is guaranteed to be a 1.
+		return
 	end
 
-	sz_a = min(sz_a, lmb)
-	if sz_sgn_a < 0 then
-		-- convert to twos complement form
-		mpn.bnot_n(a, 0, a, 0, sz_a)
-		mpn.add_1(a, 0, a, 0, sz_a, 1)
-	end
+	-- find the "flip point" (the lowest set bit), above which all bits are inverted.
+	local flipped = mpn.bscan1(a, 0, sz_a)
+	if idx < flipped then
+		local flmb, foff = mpn.blimb(flipped)
 
-	a[lmb] = bor(a[lmb], lshift(1, off))
+		-- below flip point, idx becomes the new flip point and everything between the old and new flip point must be inverted.
+		if lmb ~= flmb then
+			-- set the high bits on the least significant limb
+			a[lmb] = bor(a[lmb], band(LIMB_MAX, lshift(LIMB_MAX, off)))
+			-- fill the intermediate limbs
+			for i = lmb + 1, flmb - 1 do
+				a[i] = LIMB_MAX
+			end
+			-- set the low bits on the most significant limb
+			a[flmb] = bor(a[flmb], lshift(-1, foff))
+		else
+			a[lmb] = bor(a[lmb], band(LIMB_MAX, lshift(-1, foff), lshift(LIMB_MAX, off)))
+		end
 
-	if sz_sgn_a < 0 then
-		-- convert back to magnitude
-		mpn.bnot_n(a, 0, a, 0, sz_a)
-		mpn.add_1(a, 0, a, 0, sz_a, 1)
-	end
+		-- unset the flipped bit
+		a[flmb] = band(a[flmb], bnot(lshift(1, foff)))
+	elseif idx > flipped then
+		-- above flip point, set to 1 in complement means set to 0.
+		a[lmb] = band(a[lmb], bnot(lshift(1, off)))
+	end -- idx == flipped, bit is already 1.
 end
 
 --- Sets the bit at index `idx` to 0.
 ---@param a mpz
-function mpz.bclear(a, idx) end
+function mpz.bclear(a, idx)
+	local sz_sgn_a = a[0]
+	local sz_a = abs(sz_sgn_a)
+
+	local lmb, off = mpn.blimb(idx)
+	if sz_sgn_a >= 0 then
+		if lmb > sz_a then
+			-- any bit above the highest limb is guaranteed to be a 0.
+			return
+		end
+
+		-- just clear the bit
+		a[lmb] = band(a[lmb], bnot(lshift(1, off)))
+		return
+	end
+
+	-- negative numbers are stored as magnitude but operates as twos complement.
+	if lmb > sz_a then
+		-- we must expand our number to the new size
+		mpn.zero(a, sz_a, lmb - sz_a)
+
+		a[0] = -lmb
+		sz_a = lmb
+	end
+
+	-- twos complement negation has the effect of flipping all bits above the first 1 bit.
+	local flipped = mpn.bscan1(a, 0, sz_a)
+	if idx == flipped then
+		-- set the low bits of lmb to 1 so bscan0 searches past the flipped bit.
+		a[lmb] = bor(a[lmb], lshift(1, off + 1) - 1)
+
+		-- index of the bit we need to set to 1, everything beneath it must be set to 0.
+		local new_flipped = mpn.bscan0(a, lmb - 1, sz_a - lmb + 1) + (lmb - 1) * LIMB_SIZE
+		local flmb, foff = mpn.blimb(new_flipped)
+
+		if lmb ~= flmb then
+			-- zero the intermediate limbs
+			for i = lmb, flmb - 1 do
+				a[i] = 0
+			end
+			-- unset the low bits on the most significant limb
+			a[flmb] = band(a[flmb], lshift(-1, foff))
+		else
+			-- unset everything below foff
+			a[flmb] = band(a[flmb], lshift(-1, foff))
+		end
+
+		-- set the flipped bit
+		a[flmb] = bor(a[flmb], lshift(1, foff))
+	elseif idx > flipped then
+		-- above flip point, set to 0 in complement means set to 1.
+		a[lmb] = bor(a[lmb], lshift(1, off))
+	end -- idx < flipped, below flip point is already 0.
+end
 
 --- Inverts the bit at index `idx` from `0 -> 1` or `1 -> 0`.
 ---@param a mpz
-function mpz.binvert(a, idx) end
+function mpz.binvert(a, idx)
+	if mpz.btest(a, idx) then
+		mpz.bclear(a, idx)
+	else
+		mpz.bset(a, idx)
+	end
+end
 
 function mpz.bextract(r, a, idx, width)
 	error("todo")
