@@ -1,7 +1,7 @@
 --- Multiple Precision Integer Arithmetic
 
 local bit = require("bit")
-local mpn = require("mpn")
+local mpn = require("./mpn")
 
 local max, min, abs, floor, ceil = math.max, math.min, math.abs, math.floor, math.ceil
 local lshift, rshift, band, bor, bxor, bnot = bit.lshift, bit.rshift, bit.band, bit.bor, bit.bxor, bit.bnot
@@ -66,6 +66,14 @@ function mpz.from_one()
 	return setmetatable({ [0] = 1, 1 }, mpz)
 end
 
+--- Create a new multiple precision integer with the value of `a`.
+---@param r mpz
+---@param a mpz
+function mpz.clone(r, a)
+	r[0] = a[0]
+	mpn.copyi(r, 0, a, 0, abs(a[0]))
+end
+
 --- Create a new multiple precision integer with the value of `n`.
 ---@param n integer
 ---@return mpz
@@ -108,6 +116,76 @@ function mpz.to_number(a)
 	end
 
 	return result
+end
+
+local digits = {
+	[0] = "0",
+	"1",
+	"2",
+	"3",
+	"4",
+	"5",
+	"6",
+	"7",
+	"8",
+	"9",
+	"a",
+	"b",
+	"c",
+	"d",
+	"e",
+	"f",
+	"g",
+	"h",
+	"i",
+	"j",
+	"k",
+	"l",
+	"m",
+	"n",
+	"o",
+	"p",
+	"q",
+	"r",
+	"s",
+	"t",
+	"u",
+	"v",
+	"w",
+	"x",
+	"y",
+	"z",
+}
+
+--- Returns a string representation of the given integer.
+---@param a mpz
+---@param base? integer
+---@return string
+---@nodiscard
+function mpz.to_string(a, base)
+	base = base or 10
+	assert(base >= 2 and base <= 36, "base must be between 2 and 36")
+
+	local dup = mpz.dup(a)
+	local remain = mpz.from_zero()
+
+	local result = {}
+	while not mpz.is_zero(dup) do
+		mpz.divrem_scalar(dup, remain, dup, base)
+		local digit = mpz.to_number(remain)
+		result[#result + 1] = digits[digit]
+	end
+
+	local n = #result
+	for i = 1, n / 2 do
+		result[i], result[n - i + 1] = result[n - i + 1], result[i]
+	end
+
+	if a[0] < 0 then
+		return "-" .. table.concat(result)
+	else
+		return table.concat(result)
+	end
 end
 
 --- Returns true if the given integer is zero, false otherwise.
@@ -459,10 +537,24 @@ function mpz.mul(r, a, b)
 		return
 	end
 
+	if rawequal(r, a) then
+		a = mpz.dup(a)
+	end
+
+	if rawequal(r, b) then
+		b = mpz.dup(b)
+	end
+
+	if sz_a < sz_b then
+		a, b = b, a
+		sz_a, sz_b = sz_b, sz_a
+		sz_sgn_a, sz_sgn_b = sz_sgn_b, sz_sgn_a
+	end
+
 	local cy = mpn.mul(r, 0, a, 0, sz_a, b, 0, sz_b)
 	r[sz_a + sz_b + 1] = cy
 
-	if sz_sgn_a < 0 == sz_sgn_b < 0 then
+	if (sz_sgn_a < 0) == (sz_sgn_b < 0) then
 		-- both are negative or both are positive
 		r[0] = mpn.normalized_size(r, 0, sz_a + sz_b + 1)
 	else
@@ -493,6 +585,10 @@ function mpz.sqr(r, a)
 	if sz_a == 0 then
 		r[0] = 0
 		return
+	end
+
+	if rawequal(r, a) then
+		a = mpz.dup(a)
 	end
 
 	mpn.sqr(r, 0, a, 0, sz_a)
@@ -561,7 +657,7 @@ function mpz.divrem_scalar(q, r, a, y)
 		r[0] = mpn.normalized_size(r, 0, 1)
 	end
 
-	if sz_sgn_a < 0 == y < 0 then
+	if (sz_sgn_a < 0) == (y < 0) then
 		q[0] = mpn.normalized_size(q, 0, sz_a)
 	else
 		q[0] = -mpn.normalized_size(q, 0, sz_a)
@@ -593,7 +689,7 @@ function mpz.divrem_clobber(q, r, a, b)
 		r[0] = mpn.normalized_size(r, 0, sz_b)
 	end
 
-	if sz_sgn_a < 0 == sz_sgn_b < 0 then
+	if (sz_sgn_a < 0) == (sz_sgn_b < 0) then
 		q[0] = mpn.normalized_size(q, 0, sz_q)
 	else
 		q[0] = -mpn.normalized_size(q, 0, sz_q)
@@ -827,6 +923,10 @@ function mpz.pow_scalar(r, a, y)
 		return mpz.pow(r, a, b)
 	end
 
+	if rawequal(r, a) then
+		a = mpz.dup(a)
+	end
+
 	local sz_sgn_a = a[0]
 	local sz_a = abs(sz_sgn_a)
 
@@ -876,6 +976,10 @@ end
 ---@param b mpz
 function mpz.pow(r, a, b)
 	b = mpz.dup(b)
+	if rawequal(r, a) then
+		a = mpz.dup(a)
+	end
+
 	return mpz.pow_clobber(r, a, b)
 end
 
@@ -1123,3 +1227,5 @@ function mpz.bnot(r, a)
 	a[0] = -sz_sgn_a -- flip sign
 	mpn.sub_1(r, 0, a, 0, sz_a, 1) -- subtract 1
 end
+
+return mpz

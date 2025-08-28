@@ -24,7 +24,7 @@ local lshift, rshift, band, bor, bxor, bnot = bit.lshift, bit.rshift, bit.band, 
 ---@class mpn
 local mpn = {}
 
-local LIMB_SIZE = 3
+local LIMB_SIZE = 16
 local LIMB_RADIX = 2 ^ LIMB_SIZE
 local LIMB_MAX = LIMB_RADIX - 1
 local LIMB_NUMBER_PRECISION = ceil(64 / LIMB_SIZE)
@@ -558,8 +558,7 @@ function mpn.mul(r, r0, a, a0, an, b, b0, bn)
 
 	-- accumulate the rest of the single digit multiplications
 	for i = 2, bn do
-		t = t + i
-		r[t] = mpn.addmul_1(r, r0 + i - 1, a, a0, an, b[b0 + i])
+		r[t + i] = mpn.addmul_1(r, r0 + i - 1, a, a0, an, b[b0 + i])
 	end
 
 	__validate_dest_suffix(r, r0, an + bn)
