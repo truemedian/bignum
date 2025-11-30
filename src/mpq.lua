@@ -91,18 +91,18 @@ end
 ---@param digits integer
 ---@param base? integer
 function mpq.to_string_point(a, digits, base)
-    base = base or 10
+	base = base or 10
 
 	local exp = mpz.from_number(base)
-    mpz.pow_scalar(exp, exp, digits)
+	mpz.pow_scalar(exp, exp, digits)
 
-    local tmp = mpz.from_zero()
-    mpz.mul(tmp, a.p, exp)
+	local tmp = mpz.from_zero()
+	mpz.mul(tmp, a.p, exp)
 
 	local unused = mpz.from_zero()
 	mpz.divrem(tmp, unused, tmp, a.q)
 
-    local str = mpz.to_string(tmp, base)
+	local str = mpz.to_string(tmp, base)
 	return str:sub(1, #str - digits) .. "." .. str:sub(#str - digits + 1)
 end
 
@@ -151,8 +151,8 @@ end
 --- `r = -a`
 ---@param r mpq
 ---@param a mpq
-function mpq.neg(r, a)
-	mpz.neg(r.p, a.p)
+function mpq.negate(r, a)
+	mpz.negate(r.p, a.p)
 	mpz.clone(r.q, a.q)
 end
 
@@ -161,9 +161,9 @@ end
 --- `r = |a|`
 ---@param r mpq
 ---@param a mpq
-function mpq.abs(r, a)
-	mpz.abs(r.p, a.p)
-	mpz.abs(r.q, a.q)
+function mpq.absolute(r, a)
+	mpz.absolute(r.p , a.p)
+	mpz.absolute(r.q , a.q)
 end
 
 --- Reduces the given rational to its simplest form.
@@ -177,8 +177,8 @@ function mpq.reduce(r)
 		return
 	end
 
-	mpz.divmod(r.p, one, r.p, gcd)
-	mpz.divmod(r.q, one, r.q, gcd)
+	mpz.divrem(r.p, one, r.p, gcd)
+	mpz.divrem(r.q, one, r.q, gcd)
 end
 
 --- Computes the sum of an rational and a scalar.
@@ -201,9 +201,18 @@ end
 ---@param a mpq
 ---@param b mpq
 function mpq.add(r, a, b)
+	if rawequal(r, a) then
+		a = mpq.dup(a)
+	end
+
+	if rawequal(r, b) then
+		b = mpq.dup(b)
+	end
+
 	mpz.mul(r.p, a.p, b.q)
 	mpz.mul(r.q, a.q, b.p)
 	mpz.add(r.p, r.p, r.q)
+
 	mpz.mul(r.q, a.q, b.q)
 	mpq.reduce(r)
 end
@@ -217,7 +226,7 @@ end
 function mpq.sub_scalar(r, a, y)
 	local tmp = mpz.from_zero()
 	mpz.mul_scalar(tmp, a.q, y)
-	mpz.neg(tmp, tmp)
+	mpz.neg(tmp)
 	mpz.add(r.p, tmp, a.p)
 	mpz.clone(r.q, a.q)
 end
@@ -242,9 +251,17 @@ end
 ---@param a mpq
 ---@param b mpq
 function mpq.sub(r, a, b)
+	if rawequal(r, a) then
+		a = mpq.dup(a)
+	end
+
+	if rawequal(r, b) then
+		b = mpq.dup(b)
+	end
+
 	mpz.mul(r.p, a.p, b.q)
 	mpz.mul(r.q, a.q, b.p)
-	mpz.add(r.p, r.p, r.q)
+	mpz.sub(r.p, r.p, r.q)
 	mpz.mul(r.q, a.q, b.q)
 	mpq.reduce(r)
 end
@@ -267,6 +284,14 @@ end
 ---@param a mpq
 ---@param b mpq
 function mpq.mul(r, a, b)
+	if rawequal(r, a) then
+		a = mpq.dup(a)
+	end
+
+	if rawequal(r, b) then
+		b = mpq.dup(b)
+	end
+
 	mpz.mul(r.p, a.p, b.p)
 	mpz.mul(r.q, a.q, b.q)
 	mpq.reduce(r)

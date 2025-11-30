@@ -24,7 +24,7 @@ local lshift, rshift, band, bor, bxor, bnot = bit.lshift, bit.rshift, bit.band, 
 ---@class mpn
 local mpn = {}
 
-local LIMB_SIZE = 16
+local LIMB_SIZE = 4
 local LIMB_RADIX = 2 ^ LIMB_SIZE
 local LIMB_MAX = LIMB_RADIX - 1
 local LIMB_NUMBER_PRECISION = ceil(64 / LIMB_SIZE)
@@ -41,11 +41,17 @@ mpn.LIMB_MAX = LIMB_MAX
 --- The number of limbs required to represent a number with 64 bits of precision.
 mpn.LIMB_NUMBER_PRECISION = LIMB_NUMBER_PRECISION
 
+local __skip_check = false
+
 --- Ensures the given `a[a0:n]` is a valid array of limbs.
 ---@param a mpn.limbs_const the array to validate
 ---@param a0 mpn.offset the 0-based offset where the number starts
 ---@param n mpn.size the number of limbs expected in the array
 local function __validate_source(a, a0, n)
+	if __skip_check then
+		return
+	end
+
 	assert(type(a) == "table")
 	assert(a0 >= 0, "expected non-negative offset, got " .. tostring(a0))
 	assert(n >= 0, "expected non-negative size, got " .. tostring(n))
@@ -62,6 +68,10 @@ end
 ---@param r0 mpn.offset the 0-based offset where the number starts
 ---@param n mpn.size the number of limbs that will be expected in the array
 local function __validate_dest(r, r0, n)
+	if __skip_check then
+		return
+	end
+
 	assert(type(r) == "table")
 	assert(r0 >= 0)
 	assert(n >= 0)
@@ -72,6 +82,10 @@ end
 ---@param r0 mpn.offset the 0-based offset where the number starts
 ---@param n mpn.size the number of limbs that will be expected in the array
 local function __validate_dest_opt(r, r0, n)
+	if __skip_check then
+		return
+	end
+
 	assert(r == nil or type(r) == "table")
 	assert(r0 >= 0)
 	assert(n >= 0)
@@ -82,6 +96,10 @@ end
 ---@param r0 mpn.offset the 0-based offset where the number starts
 ---@param n mpn.size the number of limbs expected in the array
 local function __validate_dest_suffix(r, r0, n)
+	if __skip_check then
+		return
+	end
+
 	for i = 1, n do
 		local t = r[r0 + i]
 		assert(t >= 0 and t < LIMB_RADIX)
@@ -93,6 +111,10 @@ end
 ---@param r0 mpn.offset the 0-based offset where the number starts
 ---@param n mpn.size the number of limbs expected in the array
 local function __validate_dest_opt_suffix(r, r0, n)
+	if __skip_check then
+		return
+	end
+
 	if r == nil then
 		return
 	end
@@ -106,7 +128,11 @@ end
 --- Ensures the given `x` is a valid limb.
 ---@param x mpn.limb
 local function __validate_limb(x)
-	assert(x >= 0 and x < LIMB_RADIX)
+	if __skip_check then
+		return
+	end
+
+	assert(x >= 0 and x < LIMB_RADIX, "bad limb " .. tostring(x))
 end
 
 --- Copy `n` limbs from `s[s0:n]` to `r[r0:n]` in increasing order.
@@ -151,6 +177,32 @@ function mpn.copyd(r, r0, s, s0, n)
 	end
 
 	__validate_dest_suffix(r, r0, n)
+end
+
+--- Returns the sign of the difference `a[a0:an] - x`.
+---@param a mpn.limbs_const
+---@param a0 mpn.offset
+---@param an mpn.size
+---@param x mpn.limb
+---@return integer
+---@nodiscard
+function mpn.cmp_1(a, a0, an, x)
+	__validate_source(a, a0, an)
+	__validate_limb(x)
+
+	if x == 0 then
+		return an == 0 and 0 or 1
+	elseif an ~= 1 then
+		return 1
+	end
+
+	local a_k = a[a0 + 1]
+	local b_k = x
+	if a_k ~= b_k then
+		return a_k < b_k and -1 or 1
+	end
+
+	return 0
 end
 
 --- Returns the sign of the difference `a[a0:an] - b[b0:bn]`.
@@ -230,6 +282,16 @@ function mpn.is_zero(a, a0, an)
 	return mpn.normalized_size(a, a0, an) == 0
 end
 
+--- Returns true if `a[a0:an]` is not zero.
+---@param a mpn.limbs_const
+---@param a0 mpn.offset
+---@param an mpn.size
+---@return boolean
+---@nodiscard
+function mpn.is_nonzero(a, a0, an)
+	return mpn.normalized_size(a, a0, an) ~= 0
+end
+
 --- Fills `r[r0:n]` with zeroes.
 ---@param r mpn.limbs
 ---@param r0 mpn.offset
@@ -273,7 +335,7 @@ function mpn.add_1(r, r0, a, a0, n, y)
 			-- no carry necessary, so we can just copy the rest of the number
 			mpn.copyi(r, r0 + i - 1, a, a0 + i - 1, n - i + 1)
 
-			__validate_dest_suffix(r, r0, n - i + 1)
+			__validate_dest_suffix(r, r0, n)
 			return 0
 		end
 
@@ -511,7 +573,7 @@ function mpn.submul_1(r, r0, a, a0, n, y)
 	return borrow
 end
 
---- Computes `r[r0:2*n] = a[a0:n] * b[b0:n]`. Returns the most significant limb.
+--- Computes `r[r0:2*n] = a[a0:n] * b[b0:n]`.
 ---
 --- Requires `r` must not alias `a` or `b`.
 ---@param r mpn.limbs
@@ -521,12 +583,11 @@ end
 ---@param b mpn.limbs_const
 ---@param b0 mpn.offset
 ---@param n mpn.size
----@return mpn.limb
 function mpn.mul_n(r, r0, a, a0, b, b0, n)
 	return mpn.mul(r, r0, a, a0, n, b, b0, n)
 end
 
---- Computes `r[r0:an+bn] = a[a0:an] * b[b0:bn]`. Returns the most significant limb.
+--- Computes `r[r0:an+bn] = a[a0:an] * b[b0:bn]`.
 ---
 --- Requires `r` must not alias `a` or `b`.
 ---@param r mpn.limbs
@@ -537,7 +598,6 @@ end
 ---@param b mpn.limbs_const
 ---@param b0 mpn.offset
 ---@param bn mpn.size
----@return mpn.limb
 function mpn.mul(r, r0, a, a0, an, b, b0, bn)
 	__validate_dest(r, r0, an + bn)
 	__validate_source(a, a0, an)
@@ -545,10 +605,6 @@ function mpn.mul(r, r0, a, a0, an, b, b0, bn)
 	assert(an >= bn)
 	assert(not rawequal(r, a))
 	assert(not rawequal(r, b))
-
-	if an == 0 then
-		return 0
-	end
 
 	-- offset for the result carry
 	local t = r0 + an
@@ -562,7 +618,48 @@ function mpn.mul(r, r0, a, a0, an, b, b0, bn)
 	end
 
 	__validate_dest_suffix(r, r0, an + bn)
-	return r[t + bn]
+end
+
+--- Computes `r[r0:an+bn+1] += a[a0:an] * b[b0:bn]` using the Karatsuba algorithm. Returns the most significant limb of the product plus the carry-out from addition.
+---@param r mpn.limbs
+---@param r0 mpn.offset
+---@param a mpn.limbs_const
+---@param a0 mpn.offset
+---@param an mpn.size
+---@param b mpn.limbs_const
+---@param b0 mpn.offset
+---@param bn mpn.size
+---@return mpn.limb
+function mpn.addmul_karatsuba(r, r0, a, a0, an, b, b0, bn)
+	__validate_source(r, r0, an + bn)
+	__validate_source(a, a0, an)
+	__validate_source(b, b0, bn)
+	assert(an >= bn)
+	assert(not rawequal(r, a))
+	assert(not rawequal(r, b))
+	
+	
+end
+
+--- Computes `r[r0:an+bn+1] -= a[a0:an] * b[b0:bn]` using the Karatsuba algorithm. Returns the most significant limb of the product plus the carry-out from addition.
+---@param r mpn.limbs
+---@param r0 mpn.offset
+---@param a mpn.limbs_const
+---@param a0 mpn.offset
+---@param an mpn.size
+---@param b mpn.limbs_const
+---@param b0 mpn.offset
+---@param bn mpn.size
+---@return mpn.limb
+function mpn.submul_karatsuba(r, r0, a, a0, an, b, b0, bn)
+    __validate_source(r, r0, an + bn)
+    __validate_source(a, a0, an)
+    __validate_source(b, b0, bn)
+    assert(an >= bn)
+    assert(not rawequal(r, a))
+    assert(not rawequal(r, b))
+
+	
 end
 
 --- Computes `r[r0:an+bn+1] += a[a0:an] * b[b0:bn]`. Returns the most significant limb of the product plus the carry-out from
@@ -662,14 +759,14 @@ function mpn.sqr(r, r0, a, a0, n)
 	__validate_dest_suffix(r, r0, n * 2)
 end
 
---- Computes `r[r0:n] = a[a0:n] << tcnt`. Returns the carried limb.
+--- Computes `r[r0:*] = a[a0:n] << tcnt`. Returns the resulting size of `r`.
 ---@param r mpn.limbs
 ---@param r0 mpn.offset
 ---@param a mpn.limbs_const
 ---@param a0 mpn.offset
 ---@param n mpn.size
 ---@param tcnt integer
----@return mpn.limb
+---@return mpn.size
 function mpn.lshift(r, r0, a, a0, n, tcnt)
 	__validate_dest(r, r0, n)
 	__validate_source(a, a0, n)
@@ -685,33 +782,37 @@ function mpn.lshift(r, r0, a, a0, n, tcnt)
 	local cnt = tcnt - mlmb * LIMB_SIZE
 	local tnc = LIMB_SIZE - cnt
 
-	local overflow = rshift(a[a0 + n], tnc)
-	local low_half = band(lshift(a[a0 + n], cnt), LIMB_MAX)
-	for i = n - 1, 1, -1 do
-		local t = a[a0 + i]
-		local high_half = rshift(t, tnc)
-		r[r0 + i + mlmb + 1] = bor(high_half, low_half)
-		low_half = band(lshift(t, cnt), LIMB_MAX)
+	if cnt == 0 then -- shift by whole limbs only
+		mpn.copyi(r, r0 + mlmb, a, a0, n)
+		mpn.zero(r, r0, mlmb)
+		__validate_dest_suffix(r, r0, n + mlmb)
+		return n + mlmb
 	end
 
-	r[r0 + mlmb + 1] = low_half
-
-	for i = 1, mlmb do
-		r[r0 + i] = 0
+	local low_limb = a[a0 + n]
+	local overflow = rshift(low_limb, tnc)
+	local high_limb = band(lshift(low_limb, cnt), LIMB_MAX)
+	for i = n, 2, -1 do
+		low_limb = a[a0 + i - 1]
+		r[r0 + i + mlmb] = bor(high_limb, rshift(low_limb, tnc))
+		high_limb = band(lshift(low_limb, cnt), LIMB_MAX)
 	end
 
-	__validate_dest_suffix(r, r0, n)
-	return overflow
+	r[r0 + 1 + mlmb] = high_limb
+	r[r0 + n + mlmb + 1] = overflow
+
+	__validate_dest_suffix(r, r0, n + mlmb + 1)
+	return n + mlmb + 1
 end
 
---- Computes `r[r0:n] = a[a0:n] >> tcnt`. Returns the overflowed limb.
+--- Computes `r[r0:n] = a[a0:n] >> tcnt`. Returns the resulting size of `r`.
 ---@param r mpn.limbs
 ---@param r0 mpn.offset
 ---@param a mpn.limbs_const
 ---@param a0 mpn.offset
 ---@param n mpn.size
 ---@param tcnt integer
----@return mpn.limb
+---@return mpn.size
 function mpn.rshift(r, r0, a, a0, n, tcnt)
 	__validate_dest(r, r0, n)
 	__validate_source(a, a0, n)
@@ -720,36 +821,36 @@ function mpn.rshift(r, r0, a, a0, n, tcnt)
 	if n == 0 then
 		mpn.copyi(r, r0, a, a0, n)
 		__validate_dest_suffix(r, r0, n)
-		return 0
+		return n
 	end
 
 	local mlmb = floor(tcnt / LIMB_SIZE)
-	local cnt = tcnt % LIMB_SIZE
-	local tnc = LIMB_SIZE - cnt
-
-	local overflow = rshift(a[a0 + 1], cnt)
-	local high_half = rshift(a[a0 + 1], cnt)
-	for i = 1, n - mlmb - 1 do
-		local t = a[a0 + i + mlmb + 1]
-		local low_half = band(lshift(t, tnc), LIMB_MAX)
-		r[r0 + i] = bor(low_half, high_half)
-		high_half = rshift(t, cnt)
-	end
-
-	-- fill the remaining limbs with zeroes if we did a limb shift
-	if tcnt >= LIMB_SIZE then
-		r[r0 + n - mlmb] = high_half
-		for i = n - mlmb + 1, n do
-			r[r0 + i] = 0
-		end
-
-		__validate_dest_suffix(r, r0, n)
+	if mlmb >= n then
 		return 0
 	end
 
-	r[r0 + n] = high_half
-	__validate_dest_suffix(r, r0, n)
-	return overflow
+	local cnt = tcnt - mlmb * LIMB_SIZE
+	local tnc = LIMB_SIZE - cnt
+
+	if cnt == 0 then -- shift by whole limbs only
+		mpn.copyi(r, r0, a, a0 + mlmb, n - mlmb)
+		__validate_dest_suffix(r, r0, n - mlmb)
+		return n - mlmb
+	end
+
+	local high_limb = a[a0 + 1 + mlmb]
+	-- local overflow = band(lshift(high_limb, tnc), LIMB_MAX)
+	local low_limb = rshift(high_limb, cnt)
+	for i = 1, n - 1 - mlmb do
+		high_limb = a[a0 + i + 1 + mlmb]
+		r[r0 + i] = bor(low_limb, band(lshift(high_limb, tnc), LIMB_MAX))
+		low_limb = rshift(high_limb, cnt)
+	end
+
+	r[r0 + n - mlmb] = low_limb
+
+	__validate_dest_suffix(r, r0, n - mlmb)
+	return n - mlmb
 end
 
 --- Computes `q[q0:qn] = n[n0:nn] / d[d0:dn]`, `r[r0:dn] = n[n0:nn] % d[d0:dn]`.
@@ -768,10 +869,14 @@ end
 ---@param d0 mpn.offset
 ---@param dn mpn.size
 function mpn.divmod(q, q0, r, r0, n, n0, nn, d, d0, dn)
-	__validate_dest(q, q0, nn - dn + 1)
+	__validate_dest(q, q0, math.max(0, nn - dn + 1))
 	__validate_dest(r, r0, dn)
 	__validate_source(n, n0, nn)
 	__validate_source(d, d0, dn)
+
+	assert(not rawequal(q, n))
+	assert(not rawequal(q, d))
+	assert(not rawequal(n, d))
 
 	-- 0.1. dn != 0
 	dn = mpn.normalized_size(d, d0, dn)
@@ -781,11 +886,14 @@ function mpn.divmod(q, q0, r, r0, n, n0, nn, d, d0, dn)
 		error("division by zero")
 	elseif nn < dn then
 		mpn.copyi(r, r0, n, n0, nn)
-		mpn.zero(q, q0, nn - dn + 1)
+		mpn.zero(q, q0, math.max(0, nn - dn + 1))
 		__validate_dest_suffix(q, q0, nn - dn + 1)
 		__validate_dest_suffix(r, r0, dn)
 		return
 	end
+
+	assert(d[d0 + dn] ~= 0, "divisor must be normalized")
+	assert(nn >= dn and dn >= 1)
 
 	local norm_shift, norm_test = 0, d[d0 + dn]
 	while norm_test < LIMB_RADIX / 2 do
@@ -793,12 +901,9 @@ function mpn.divmod(q, q0, r, r0, n, n0, nn, d, d0, dn)
 		norm_test = lshift(norm_test, 1)
 	end
 
-	assert(mpn.lshift(d, d0, d, d0, dn, norm_shift) == 0) -- cannot overflow, we shift only to the highest bit
-	local noverfow = mpn.lshift(n, n0, n, n0, nn, norm_shift)
-	if noverfow ~= 0 then
-		n[n0 + nn + 1] = noverfow
-		nn = nn + 1
-	end
+	mpn.lshift(d, d0, d, d0, dn, norm_shift) -- cannot overflow, we shift only to the highest bit
+	nn = mpn.lshift(n, n0, n, n0, nn, norm_shift)
+	nn = mpn.normalized_size(n, n0, nn)
 
 	-- 1. for j from 0 to nn - dn, set q[j] = 0
 	for j = 1, nn - dn + 1 do
@@ -806,56 +911,53 @@ function mpn.divmod(q, q0, r, r0, n, n0, nn, d, d0, dn)
 	end
 
 	-- 2. while n >= d * b^(nn - dn)
-	while mpn.cmp_n(n, n0 + nn - dn, d, d0, dn) >= 0 do
+	-- normalization guarantees this can only loop once
+	if mpn.cmp_n(n, n0 + nn - dn, d, d0, dn) >= 0 then
 		-- 2.1 set q[nn - dn] += 1
 		q[q0 + nn - dn + 1] = q[q0 + nn - dn + 1] + 1
 
 		-- 2.2 n -= d * b^(nn - dn)
 		mpn.sub_n(n, n0 + nn - dn, n, n0 + nn - dn, d, d0, dn)
 	end
+	assert(mpn.cmp_n(n, n0 + nn - dn, d, d0, dn) < 0)
+
+	local dk = d[d0 + dn] * LIMB_RADIX + (dn - 1 > 0 and d[d0 + dn - 1] or 0)
 
 	-- 3. for i from nn - 1 down to dn do
 	for i = nn, dn + 1, -1 do
 		local k = i - dn
+		local nk = n[n0 + i] * LIMB_RADIX * LIMB_RADIX
+			+ (i - 1 > 0 and n[n0 + i - 1] or 0) * LIMB_RADIX
+			+ (i - 2 > 0 and n[n0 + i - 2] or 0)
 
-		-- 3.1 if n[i] == d[dn]
-		if n[n0 + i] == d[d0 + dn] then
-			-- 3.1.1 then set q[k] = b - 1
-			q[q0 + k] = LIMB_MAX
-		else
-			-- 3.1.2 otherwise set q[k] = floor((n[i] * b + n[i - 1]) / d[dn])
-			q[q0 + k] = floor((n[n0 + i] * LIMB_RADIX + n[n0 + i - 1]) / d[d0 + dn])
-		end
-
-		local y = {}
-		local x = { n[n0 + i - 2] or 0, n[n0 + i - 1] or 0, n[n0 + i] }
+		-- 3.1 if n[i] == d[dn] then
+		--        set q[k] = b - 1
+		--     else
+		--        set q[k] = floor((n[i] * b + n[i - 1]) / d[dn])
+		-- enhancement: use 3-limb division to reduce 3.2 to a single comparison
+		local qk = (n[n0 + i] == d[d0 + dn]) and LIMB_MAX or floor(nk / dk)
 
 		-- 3.2 while q[k] * (d[dn] * b + d[dn - 1]) > (n[i] * b^2 + n[i - 1] * b + n[i - 2])
-		while true do
-			y[1] = d[d0 + dn - 1] or 0
-			y[2] = d[d0 + dn]
-			y[3] = mpn.mul_1(y, 0, y, 0, 2, q[q0 + k])
-
-			if mpn.cmp_n(y, 0, x, 0, 3) > 0 then
-				-- 3.2.1 set q[k] -= 1
-				q[q0 + k] = q[q0 + k] - 1
-			else
-				break
-			end
+		-- this can loop at most once because of the enhancement in 3.1
+		if qk * dk > nk then
+			qk = qk - 1
 		end
+		assert(qk * dk <= nk)
 
 		-- 3.3 set n -= q[k] * d * b^(i - dn - 1)
-		local overflow = mpn.submul_1(n, n0 + k - 1, d, d0, dn, q[q0 + k])
+		local overflow = mpn.submul_1(n, n0 + k - 1, d, d0, dn, qk)
 		overflow = mpn.sub_1(n, n0 + i - 1, n, n0 + i - 1, nn - i + 1, overflow)
 
 		-- 3.4 if n < 0 then
 		if overflow > 0 then
 			-- 3.4.1 set x += d * b^(i - dn - 1)
-			mpn.add_n(n, n0 + i - dn, n, n0 + i - dn, d, d0, dn)
+			mpn.add_n(n, n0 + k - 1, n, n0 + k - 1, d, d0, dn)
 
 			-- 3.4.2 set q[k] -= 1
-			q[q0 + k] = q[q0 + k] - 1
+			qk = qk - 1
 		end
+
+		q[q0 + k] = qk
 	end
 
 	-- 4. set r = n, fix d
@@ -881,6 +983,8 @@ function mpn.mod(r, r0, n, n0, nn, d, d0, dn)
 	__validate_source(n, n0, nn)
 	__validate_source(d, d0, dn)
 
+	assert(not rawequal(n, d))
+
 	-- 0.1. dn != 0
 	dn = mpn.normalized_size(d, d0, dn)
 
@@ -893,61 +997,61 @@ function mpn.mod(r, r0, n, n0, nn, d, d0, dn)
 		return
 	end
 
+	assert(d[d0 + dn] ~= 0, "divisor must be normalized")
+	assert(nn >= dn and dn >= 1)
+
 	local norm_shift, norm_test = 0, d[d0 + dn]
 	while norm_test < LIMB_RADIX / 2 do
 		norm_shift = norm_shift + 1
 		norm_test = lshift(norm_test, 1)
 	end
 
-	assert(mpn.lshift(d, d0, d, d0, dn, norm_shift) == 0) -- cannot overflow, we shift only to the highest bit
-	local noverfow = mpn.lshift(n, n0, n, n0, nn, norm_shift)
-	if noverfow ~= 0 then
-		n[n0 + nn + 1] = noverfow
-		nn = nn + 1
-	end
+	mpn.lshift(d, d0, d, d0, dn, norm_shift) -- cannot overflow, we shift only to the highest bit
+	nn = mpn.lshift(n, n0, n, n0, nn, norm_shift)
+	nn = mpn.normalized_size(n, n0, nn)
 
 	-- 2. while n >= d * b^(nn - dn)
-	while mpn.cmp_n(n, n0 + nn - dn, d, d0, dn) >= 0 do
+	-- normalization guarantees this can only loop once
+	if mpn.cmp_n(n, n0 + nn - dn, d, d0, dn) >= 0 then
 		-- 2.2 n -= d * b^(nn - dn)
 		mpn.sub_n(n, n0 + nn - dn, n, n0 + nn - dn, d, d0, dn)
 	end
+	assert(mpn.cmp_n(n, n0 + nn - dn, d, d0, dn) < 0)
+
+	local dk = d[d0 + dn] * LIMB_RADIX + (dn - 1 > 0 and d[d0 + dn - 1] or 0)
 
 	-- 3. for i from nn - 1 down to dn do
 	for i = nn, dn + 1, -1 do
 		local k = i - dn
-		local q = LIMB_MAX
+		local nk = n[n0 + i] * LIMB_RADIX * LIMB_RADIX
+			+ (i - 1 > 0 and n[n0 + i - 1] or 0) * LIMB_RADIX
+			+ (i - 2 > 0 and n[n0 + i - 2] or 0)
 
-		-- 3.1 if n[i] == d[dn]
-		if n[n0 + i] ~= d[d0 + dn] then
-			-- 3.1.2 otherwise set q[k] = floor((n[i] * b + n[i - 1]) / d[dn])
-			q = floor((n[n0 + i] * LIMB_RADIX + n[n0 + i - 1]) / d[d0 + dn])
-		end
-
-		local y = {}
-		local x = { n[n0 + i - 2] or 0, n[n0 + i - 1] or 0, n[n0 + i] }
+		-- 3.1 if n[i] == d[dn] then
+		--        set q[k] = b - 1
+		--     else
+		--        set q[k] = floor((n[i] * b + n[i - 1]) / d[dn])
+		-- enhancement: use 3-limb division to reduce 3.2 to a single comparison
+		local qk = (n[n0 + i] == d[d0 + dn]) and LIMB_MAX or floor(nk / dk)
 
 		-- 3.2 while q[k] * (d[dn] * b + d[dn - 1]) > (n[i] * b^2 + n[i - 1] * b + n[i - 2])
-		while true do
-			y[1] = d[d0 + dn - 1] or 0
-			y[2] = d[d0 + dn]
-			y[3] = mpn.mul_1(y, 0, y, 0, 2, q)
-
-			if mpn.cmp_n(y, 0, x, 0, 3) > 0 then
-				-- 3.2.1 set q[k] -= 1
-				q = q - 1
-			else
-				break
-			end
+		-- this can loop at most once because of the enhancement in 3.1
+		if qk * dk > nk then
+			qk = qk - 1
 		end
+		assert(qk * dk <= nk)
 
 		-- 3.3 set n -= q[k] * d * b^(i - dn - 1)
-		local overflow = mpn.submul_1(n, n0 + k - 1, d, d0, dn, q)
+		local overflow = mpn.submul_1(n, n0 + k - 1, d, d0, dn, qk)
 		overflow = mpn.sub_1(n, n0 + i - 1, n, n0 + i - 1, nn - i + 1, overflow)
 
 		-- 3.4 if n < 0 then
 		if overflow > 0 then
 			-- 3.4.1 set x += d * b^(i - dn - 1)
-			mpn.add_n(n, n0 + i - dn, n, n0 + i - dn, d, d0, dn)
+			mpn.add_n(n, n0 + k - 1, n, n0 + k - 1, d, d0, dn)
+
+			-- 3.4.2 set q[k] -= 1
+			qk = qk - 1
 		end
 	end
 
@@ -1115,6 +1219,9 @@ function mpn.gcd(r, r0, a, a0, an, b, b0, bn)
 	bn = mpn.normalized_size(b, b0, bn)
 
 	while true do
+		assert(band(a[b0 + 1], 1) == 1)
+		assert(band(b[b0 + 1], 1) == 1)
+
 		if mpn.cmp(a, a0, an, b, b0, bn) >= 0 then
 			a, b = b, a
 			a0, b0 = b0, a0
@@ -1123,10 +1230,11 @@ function mpn.gcd(r, r0, a, a0, an, b, b0, bn)
 
 		mpn.sub(b, b0, b, b0, bn, a, a0, an)
 
+		assert(band(b[b0 + 1], 1) == 0)
 		if mpn.is_zero(b, b0, bn) then
-			mpn.lshift(r, r0, a, a0, an, k)
+			local rn = mpn.lshift(r, r0, a, a0, an, k)
 			__validate_dest_suffix(r, r0, an)
-			return an
+			return rn
 		end
 
 		while band(b[b0 + 1], 1) == 0 do
@@ -1146,10 +1254,13 @@ end
 ---@param a0 mpn.offset
 ---@param n mpn.size
 ---@param y mpn.limb
+---@return mpn.size
 function mpn.pow_1(r, r0, a, a0, n, y)
 	__validate_dest(r, r0, n)
 	__validate_source(a, a0, n)
 	__validate_limb(y)
+
+	assert(not rawequal(r, a))
 
 	if n == 0 then
 		r[r0 + 1] = 1
@@ -1210,20 +1321,25 @@ end
 
 --- Computes `r[r0:return] = a[a0:an] ^ b[b0:bn]`. Returns the number of limbs in result.
 ---
---- Requires `r` must not alias `a` or `b`.
---- Clobbers `b`.
----@param r any
----@param r0 any
----@param a any
----@param a0 any
----@param an any
----@param b any
----@param b0 any
----@param bn any
+--- Requires `r` must not alias `a` or `b`, `a` must not alias `b`.
+--- Clobbers `a` and `b`.
+---@param r mpn.limbs
+---@param r0 mpn.offset
+---@param a mpn.limbs
+---@param a0 mpn.offset
+---@param an mpn.size
+---@param b mpn.limbs
+---@param b0 mpn.offset
+---@param bn mpn.size
+---@return mpn.size
 function mpn.pow(r, r0, a, a0, an, b, b0, bn)
 	__validate_dest(r, r0, an)
 	__validate_source(a, a0, an)
 	__validate_source(b, b0, bn)
+
+	assert(not rawequal(r, a))
+	assert(not rawequal(r, b))
+	assert(not rawequal(a, b))
 
 	if an == 0 then
 		r[r0 + 1] = 1
@@ -1461,29 +1577,29 @@ end
 ---@param idx mpn.size
 ---@param width mpn.size
 function mpn.bextract(r, r0, a, a0, n, idx, width)
-    __validate_dest(r, r0, n)
-    __validate_source(a, a0, n)
+	__validate_dest(r, r0, n)
+	__validate_source(a, a0, n)
 
-    local limb_offset = rshift(idx, LIMB_SIZE)
-    local inner_offset = band(idx, LIMB_MAX)
+	local limb_offset = rshift(idx, LIMB_SIZE)
+	local inner_offset = band(idx, LIMB_MAX)
 
-    local limb_width_max = ceil((width + inner_offset) / LIMB_SIZE)
-    local limb_width = ceil(width / LIMB_SIZE)
-    local limb_high = ceil((width + 1) / LIMB_SIZE)
+	local limb_width_max = ceil((width + inner_offset) / LIMB_SIZE)
+	local limb_width = ceil(width / LIMB_SIZE)
+	local limb_high = ceil((width + 1) / LIMB_SIZE)
 
-    -- store the bits including any overflowed high bits in the result
-    mpn.rshift(r, r0, a, a0 + limb_offset, math.min(limb_width_max, n - limb_offset), inner_offset)
+	-- store the bits including any overflowed high bits in the result
+	mpn.rshift(r, r0, a, a0 + limb_offset, math.min(limb_width_max, n - limb_offset), inner_offset)
 
-    if limb_width_max ~= limb_width then
-        r[r0 + limb_width_max] = 0
-    end
+	if limb_width_max ~= limb_width then
+		r[r0 + limb_width_max] = 0
+	end
 
-    -- mask away the high bits we don't want
-    local high_mask = lshift(1, width % LIMB_SIZE) - 1
-    r[r0 + limb_high] = band(r[r0 + limb_high], high_mask)
+	-- mask away the high bits we don't want
+	local high_mask = lshift(1, width % LIMB_SIZE) - 1
+	r[r0 + limb_high] = band(r[r0 + limb_high], high_mask)
 
-    __validate_dest_suffix(r, r0, limb_width)
-    return limb_width
+	__validate_dest_suffix(r, r0, limb_width)
+	return limb_width
 end
 
 --- Computes `r[r0:n] = a[a0:n] & b[b0:n]`
@@ -1541,123 +1657,6 @@ function mpn.bxor_n(r, r0, a, a0, b, b0, n)
 
 	for i = 1, n do
 		r[r0 + i] = bxor(a[a0 + i], b[b0 + i])
-	end
-
-	__validate_dest_suffix(r, r0, n)
-end
-
---- Computes `r[r0:n] = a[a0:n] & (~b[b0:n])`
----@param r mpn.limbs
----@param r0 mpn.offset
----@param a mpn.limbs_const
----@param a0 mpn.offset
----@param b mpn.limbs_const
----@param b0 mpn.offset
----@param n mpn.size
-function mpn.bandn_n(r, r0, a, a0, b, b0, n)
-	__validate_dest(r, r0, n)
-	__validate_source(a, a0, n)
-	__validate_source(b, b0, n)
-
-	for i = 1, n do
-		r[r0 + i] = band(a[a0 + i], bnot(b[b0 + i]))
-	end
-
-	__validate_dest_suffix(r, r0, n)
-end
-
---- Computes `r[r0:n] = a[a0:n] | (~b[b0:n])`
----@param r mpn.limbs
----@param r0 mpn.offset
----@param a mpn.limbs_const
----@param a0 mpn.offset
----@param b mpn.limbs_const
----@param b0 mpn.offset
----@param n mpn.size
-function mpn.biorn_n(r, r0, a, a0, b, b0, n)
-	__validate_dest(r, r0, n)
-	__validate_source(a, a0, n)
-	__validate_source(b, b0, n)
-
-	for i = 1, n do
-		r[r0 + i] = band(bor(a[a0 + i], bnot(b[b0 + i])), LIMB_MAX)
-	end
-
-	__validate_dest_suffix(r, r0, n)
-end
-
---- Computes `r[r0:n] = ~(a[a0:n] & b[b0:n])`
----@param r mpn.limbs
----@param r0 mpn.offset
----@param a mpn.limbs_const
----@param a0 mpn.offset
----@param b mpn.limbs_const
----@param b0 mpn.offset
----@param n mpn.size
-function mpn.bnand_n(r, r0, a, a0, b, b0, n)
-	__validate_dest(r, r0, n)
-	__validate_source(a, a0, n)
-	__validate_source(b, b0, n)
-
-	for i = 1, n do
-		r[r0 + i] = band(bnot(band(a[a0 + i], b[b0 + i])), LIMB_MAX)
-	end
-
-	__validate_dest_suffix(r, r0, n)
-end
-
---- Computes `r[r0:n] = ~(a[a0:n] | b[b0:n])`
----@param r mpn.limbs
----@param r0 mpn.offset
----@param a mpn.limbs_const
----@param a0 mpn.offset
----@param b mpn.limbs_const
----@param b0 mpn.offset
----@param n mpn.size
-function mpn.binor_n(r, r0, a, a0, b, b0, n)
-	__validate_dest(r, r0, n)
-	__validate_source(a, a0, n)
-	__validate_source(b, b0, n)
-
-	for i = 1, n do
-		r[r0 + i] = band(bnot(bor(a[a0 + i], b[b0 + i])), LIMB_MAX)
-	end
-
-	__validate_dest_suffix(r, r0, n)
-end
-
---- Computes `r[r0:n] = ~(a[a0:n] ~ b[b0:n])`
----@param r mpn.limbs
----@param r0 mpn.offset
----@param a mpn.limbs_const
----@param a0 mpn.offset
----@param b mpn.limbs_const
----@param b0 mpn.offset
----@param n mpn.size
-function mpn.bxnor_n(r, r0, a, a0, b, b0, n)
-	__validate_dest(r, r0, n)
-	__validate_source(a, a0, n)
-	__validate_source(b, b0, n)
-
-	for i = 1, n do
-		r[r0 + i] = band(bnot(bxor(a[a0 + i], b[b0 + i])), LIMB_MAX)
-	end
-
-	__validate_dest_suffix(r, r0, n)
-end
-
---- Computes `r[r0:n] = ~a[a0:n]`
----@param r mpn.limbs
----@param r0 mpn.offset
----@param a mpn.limbs_const
----@param a0 mpn.offset
----@param n mpn.size
-function mpn.bnot_n(r, r0, a, a0, n)
-	__validate_dest(r, r0, n)
-	__validate_source(a, a0, n)
-
-	for i = 1, n do
-		r[r0 + i] = band(bnot(a[a0 + i]), LIMB_MAX)
 	end
 
 	__validate_dest_suffix(r, r0, n)
