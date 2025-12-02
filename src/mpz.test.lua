@@ -62,7 +62,7 @@ describe("mpz.from_number", function()
 	end)
 end)
 
-pending("mpz.cmp", function()
+describe("mpz.cmp", function()
 	it("is correct #validate", function()
 		for x = -R, R do
 			local a = mpz.from_number(x)
@@ -258,7 +258,6 @@ describe("mpz.divrem & mpz.rem", function()
 					local nq = scalar(x / y)
 					local nr = x - nq * y
 
-                    print(x, y, nq, nr)
 					mpz.divrem_noalias(q, r, a0, b)
 					assert.are.equal(nq, mpz.to_number(q))
 					assert.are.equal(nr, mpz.to_number(r))

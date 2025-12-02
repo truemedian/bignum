@@ -557,7 +557,7 @@ describe("mpn.addmul", function()
 		local b = { 1, 2 }
 		local r = { 1, 1, 1, 1 }
 
-		mpn.addmul(r, 0, a, 0, 2, b, 0, 2)
+		mpn.addmul(r, 0, 4, a, 0, 2, b, 0, 2)
 		assert.are.same({ 2, 5, 5, 1, 0 }, r)
 	end)
 
@@ -566,7 +566,7 @@ describe("mpn.addmul", function()
 		local b = { LIMB_MAX, LIMB_MAX }
 		local r = { LIMB_MAX, LIMB_MAX, LIMB_MAX, LIMB_MAX }
 
-		mpn.addmul(r, 0, a, 0, 2, b, 0, 2)
+		mpn.addmul(r, 0, 4, a, 0, 2, b, 0, 2)
 		assert.are.same({ 0, 0, LIMB_MAX - 1, LIMB_MAX, 1 }, r)
 	end)
 end)
@@ -577,7 +577,7 @@ describe("mpn.submul", function()
 		local b = { 1, 2 }
 		local r = { 1, 1, 1, 1 }
 
-		mpn.submul(r, 0, a, 0, 2, b, 0, 2)
+		mpn.submul(r, 0, 4, a, 0, 2, b, 0, 2)
 		assert.are.same({ 0, LIMB_MAX - 2, LIMB_MAX - 3, 0 }, r)
 	end)
 end)

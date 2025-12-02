@@ -28,6 +28,7 @@ local LIMB_SIZE = 4
 local LIMB_RADIX = 2 ^ LIMB_SIZE
 local LIMB_MAX = LIMB_RADIX - 1
 local LIMB_NUMBER_PRECISION = ceil(64 / LIMB_SIZE)
+local KARATSUBA_THRESHOLD = 2
 
 --- Number of bits in a single limb.
 mpn.LIMB_SIZE = LIMB_SIZE
@@ -606,6 +607,12 @@ function mpn.mul(r, r0, a, a0, an, b, b0, bn)
 	assert(not rawequal(r, a))
 	assert(not rawequal(r, b))
 
+	if bn >= KARATSUBA_THRESHOLD then
+		mpn.zero(r, r0, an + bn)
+		assert(mpn.addmul_karatsuba(r, r0, an + bn, a, a0, an, b, b0, bn) == 0)
+		return
+	end
+
 	-- offset for the result carry
 	local t = r0 + an
 
@@ -620,9 +627,10 @@ function mpn.mul(r, r0, a, a0, an, b, b0, bn)
 	__validate_dest_suffix(r, r0, an + bn)
 end
 
---- Computes `r[r0:an+bn+1] += a[a0:an] * b[b0:bn]` using the Karatsuba algorithm. Returns the most significant limb of the product plus the carry-out from addition.
+--- Computes `r[r0:an+bn+1] += a[a0:an] * b[b0:bn]` using the Karatsuba algorithm.
 ---@param r mpn.limbs
 ---@param r0 mpn.offset
+---@param rn mpn.size
 ---@param a mpn.limbs_const
 ---@param a0 mpn.offset
 ---@param an mpn.size
@@ -630,50 +638,8 @@ end
 ---@param b0 mpn.offset
 ---@param bn mpn.size
 ---@return mpn.limb
-function mpn.addmul_karatsuba(r, r0, a, a0, an, b, b0, bn)
-	__validate_source(r, r0, an + bn)
-	__validate_source(a, a0, an)
-	__validate_source(b, b0, bn)
-	assert(an >= bn)
-	assert(not rawequal(r, a))
-	assert(not rawequal(r, b))
-	
-	
-end
-
---- Computes `r[r0:an+bn+1] -= a[a0:an] * b[b0:bn]` using the Karatsuba algorithm. Returns the most significant limb of the product plus the carry-out from addition.
----@param r mpn.limbs
----@param r0 mpn.offset
----@param a mpn.limbs_const
----@param a0 mpn.offset
----@param an mpn.size
----@param b mpn.limbs_const
----@param b0 mpn.offset
----@param bn mpn.size
----@return mpn.limb
-function mpn.submul_karatsuba(r, r0, a, a0, an, b, b0, bn)
-    __validate_source(r, r0, an + bn)
-    __validate_source(a, a0, an)
-    __validate_source(b, b0, bn)
-    assert(an >= bn)
-    assert(not rawequal(r, a))
-    assert(not rawequal(r, b))
-
-	
-end
-
---- Computes `r[r0:an+bn+1] += a[a0:an] * b[b0:bn]`. Returns the most significant limb of the product plus the carry-out from
---- addition.
----@param r mpn.limbs
----@param r0 mpn.offset
----@param a mpn.limbs_const
----@param a0 mpn.offset
----@param an mpn.size
----@param b mpn.limbs_const
----@param b0 mpn.offset
----@param bn mpn.size
----@return mpn.limb
-function mpn.addmul(r, r0, a, a0, an, b, b0, bn)
+---@nodiscard
+function mpn.addmul_karatsuba(r, r0, rn, a, a0, an, b, b0, bn)
 	__validate_source(r, r0, an + bn)
 	__validate_source(a, a0, an)
 	__validate_source(b, b0, bn)
@@ -681,23 +647,229 @@ function mpn.addmul(r, r0, a, a0, an, b, b0, bn)
 	assert(not rawequal(r, a))
 	assert(not rawequal(r, b))
 
-	r[an + bn + 1] = 0
+	local k = ceil(bn / 2)
+
+	local a1 = a0 + k
+	local a0n, a1n = mpn.normalized_size(a, a0, k), mpn.normalized_size(a, a1, an - k)
+
+	local b1 = b0 + k
+	local b0n, b1n = mpn.normalized_size(b, b0, k), mpn.normalized_size(b, b1, bn - k)
+
+	local r0n = math.max(an + bn, rn)
+
+	local r1 = r0 + k
+	local r1n = r0n - k
+
+	local r2 = r0 + 2 * k
+	local r2n = r0n - 2 * k
+
+	local tmp = {}
+
+	local a0b0n = a0n + b0n
+	if a0n > b0n then
+		mpn.mul(tmp, 0, a, a0, a0n, b, b0, b0n)
+	else
+		mpn.mul(tmp, 0, b, b0, b0n, a, a0, a0n)
+	end
+
+	local c0 = mpn.add(r, r0, r, r0, r0n, tmp, 0, a0b0n) -- r += a0 * b0
+	local c1 = mpn.add(r, r1, r, r1, r1n, tmp, 0, a0b0n) -- r += a0 * b0 * B
+
+	local a1b1n = a1n + b1n
+	if a1n > b1n then
+		mpn.mul(tmp, 0, a, a1, a1n, b, b1, b1n)
+	else
+		mpn.mul(tmp, 0, b, b1, b1n, a, a1, a1n)
+	end
+
+	local c2 = mpn.add(r, r1, r, r1, r1n, tmp, 0, a1b1n) -- r += a1 * b1 * B
+	local c3 = mpn.add(r, r2, r, r2, r2n, tmp, 0, a1b1n) -- r += a1 * b1 * B^2
+
+	local j0s = mpn.cmp(a, a1, a1n, a, a0, a0n)
+	local j1s = mpn.cmp(b, b1, b1n, b, b0, b0n)
+
+	if j0s == 0 or j1s == 0 then
+		-- one of the differences is zero, so the product is zero
+		__validate_dest_suffix(r, r0, an + bn)
+		return c0 + c1 + c2 + c3
+	end
+
+	local j0 = {}
+	local j1 = {}
+
+	if j0s > 0 then
+		assert(mpn.sub(j0, 0, a, a1, a1n, a, a0, a0n) == 0)
+	else
+		assert(mpn.sub(j0, 0, a, a0, a0n, a, a1, a1n) == 0)
+	end
+	local j0n = mpn.normalized_size(j0, 0, math.max(a0n, a1n))
+
+	if j1s > 0 then
+		assert(mpn.sub(j1, 0, b, b1, b1n, b, b0, b0n) == 0)
+	else
+		assert(mpn.sub(j1, 0, b, b0, b0n, b, b1, b1n) == 0)
+	end
+	local j1n = mpn.normalized_size(j1, 0, math.max(b0n, b1n))
+
+	if j1n > j0n then
+		j0, j1 = j1, j0
+		j0n, j1n = j1n, j0n
+	end
+
+	if j0s ~= j1s then
+		local carry = mpn.addmul(r, r1, r1n, j0, 0, j0n, j1, 0, j1n) -- r += (j0 * j1) * B
+		local c4 = mpn.add_1(r, r2, r, r2, r2n, carry) -- propagate carry to r2
+		return c0 + c1 + c2 + c3 + c4
+	else
+		local borrow = mpn.submul(r, r1, r1n, j0, 0, j0n, j1, 0, j1n) -- r -= (j0 * j1) * B
+		local c4 = mpn.sub_1(r, r2, r, r2, r2n, borrow) -- propagate borrow to r2
+		return c0 + c1 + c2 + c3 - c4
+	end
+end
+
+--- Computes `r[r0:an+bn+1] -= a[a0:an] * b[b0:bn]` using the Karatsuba algorithm.
+---@param r mpn.limbs
+---@param r0 mpn.offset
+---@param rn mpn.size
+---@param a mpn.limbs_const
+---@param a0 mpn.offset
+---@param an mpn.size
+---@param b mpn.limbs_const
+---@param b0 mpn.offset
+---@param bn mpn.size
+---@return mpn.limb
+---@nodiscard
+function mpn.submul_karatsuba(r, r0, rn, a, a0, an, b, b0, bn)
+	__validate_source(r, r0, an + bn)
+	__validate_source(a, a0, an)
+	__validate_source(b, b0, bn)
+	assert(an >= bn)
+	assert(not rawequal(r, a))
+	assert(not rawequal(r, b))
+
+	local k = ceil(bn / 2)
+
+	local a1 = a0 + k
+	local a0n, a1n = mpn.normalized_size(a, a0, k), mpn.normalized_size(a, a1, an - k)
+
+	local b1 = b0 + k
+	local b0n, b1n = mpn.normalized_size(b, b0, k), mpn.normalized_size(b, b1, bn - k)
+
+	local r0n = math.max(an + bn, rn)
+
+	local r1 = r0 + k
+	local r1n = r0n - k
+
+	local r2 = r0 + 2 * k
+	local r2n = r0n - 2 * k
+
+	local tmp = {}
+
+	local a0b0n = a0n + b0n
+	if a0n > b0n then
+		mpn.mul(tmp, 0, a, a0, a0n, b, b0, b0n)
+	else
+		mpn.mul(tmp, 0, b, b0, b0n, a, a0, a0n)
+	end
+
+	local c0 = mpn.sub(r, r0, r, r0, r0n, tmp, 0, a0b0n) -- r -= a0 * b0
+	local c1 = mpn.sub(r, r1, r, r1, r1n, tmp, 0, a0b0n) -- r -= a0 * b0 * B
+
+	local a1b1n = a1n + b1n
+	if a1n > b1n then
+		mpn.mul(tmp, 0, a, a1, a1n, b, b1, b1n)
+	else
+		mpn.mul(tmp, 0, b, b1, b1n, a, a1, a1n)
+	end
+
+	local c2 = mpn.sub(r, r1, r, r1, r1n, tmp, 0, a1b1n) -- r -= a1 * b1 * B
+	local c3 = mpn.sub(r, r2, r, r2, r2n, tmp, 0, a1b1n) -- r -= a1 * b1 * B^2
+
+	local j0s = mpn.cmp(a, a1, a1n, a, a0, a0n)
+	local j1s = mpn.cmp(b, b1, b1n, b, b0, b0n)
+
+	if j0s == 0 or j1s == 0 then
+		-- one of the differences is zero, so the product is zero
+		__validate_dest_suffix(r, r0, an + bn)
+		return -c0 - c1 - c2 - c3
+	end
+
+	local j0 = {}
+	local j1 = {}
+
+	if j0s > 0 then
+		assert(mpn.sub(j0, 0, a, a1, a1n, a, a0, a0n) == 0)
+	else
+		assert(mpn.sub(j0, 0, a, a0, a0n, a, a1, a1n) == 0)
+	end
+	local j0n = mpn.normalized_size(j0, 0, math.max(a0n, a1n))
+
+	if j1s > 0 then
+		assert(mpn.sub(j1, 0, b, b1, b1n, b, b0, b0n) == 0)
+	else
+		assert(mpn.sub(j1, 0, b, b0, b0n, b, b1, b1n) == 0)
+	end
+	local j1n = mpn.normalized_size(j1, 0, math.max(b0n, b1n))
+
+	if j1n > j0n then
+		j0, j1 = j1, j0
+		j0n, j1n = j1n, j0n
+	end
+
+	if j0s ~= j1s then
+		local borrow = mpn.submul(r, r1, r1n, j0, 0, j0n, j1, 0, j1n)
+		local c4 = mpn.sub_1(r, r2, r, r2, r2n, borrow) -- propagate borrow to r2
+		return -c0 - c1 - c2 - c3 - c4
+	else
+		local carry = mpn.addmul(r, r1, r1n, j0, 0, j0n, j1, 0, j1n)
+		local c4 = mpn.add_1(r, r2, r, r2, r2n, carry) -- propagate carry to r2
+		return -c0 - c1 - c2 - c3 + c4
+	end
+end
+
+--- Computes `r[r0:max(an+bn,rn)+1] += a[a0:an] * b[b0:bn]`.
+---@param r mpn.limbs
+---@param r0 mpn.offset
+---@param rn mpn.size
+---@param a mpn.limbs_const
+---@param a0 mpn.offset
+---@param an mpn.size
+---@param b mpn.limbs_const
+---@param b0 mpn.offset
+---@param bn mpn.size
+---@return mpn.limb
+---@nodiscard
+function mpn.addmul(r, r0, rn, a, a0, an, b, b0, bn)
+	rn = math.max(an + bn, rn)
+
+	__validate_source(r, r0, rn)
+	__validate_source(a, a0, an)
+	__validate_source(b, b0, bn)
+	assert(an >= bn)
+	assert(not rawequal(r, a))
+	assert(not rawequal(r, b))
+
+	if bn >= KARATSUBA_THRESHOLD then
+		-- use Karatsuba for large multiplications
+		return mpn.addmul_karatsuba(r, r0, rn, a, a0, an, b, b0, bn)
+	end
 
 	-- accumulate the rest of the single digit multiplications
+	local carry = 0
 	for i = 1, bn do
-		local t = r0 + an + i - 1
+		local t = an + i - 1
 		local c = mpn.addmul_1(r, r0 + i - 1, a, a0, an, b[b0 + i])
-		mpn.add_1(r, r0 + t, r, r0 + t, an + bn - t + 1, c)
+		carry = carry + mpn.add_1(r, r0 + t, r, r0 + t, rn - t + 1, c)
 	end
 
-	__validate_dest_suffix(r, r0, an + bn)
-	return r[an + bn + 1]
+	__validate_dest_suffix(r, r0, rn)
+	return carry
 end
 
---- Computes `r[r0:an+bn] += a[a0:an] * b[b0:bn]`. Returns the most significant limb of the product plus the carry-out from
---- addition.
+--- Computes `r[r0:max(an+bn,rn)] -= a[a0:an] * b[b0:bn]`.
 ---@param r mpn.limbs
 ---@param r0 mpn.offset
+---@param rn mpn.size
 ---@param a mpn.limbs_const
 ---@param a0 mpn.offset
 ---@param an mpn.size
@@ -705,23 +877,32 @@ end
 ---@param b0 mpn.offset
 ---@param bn mpn.size
 ---@return mpn.limb
-function mpn.submul(r, r0, a, a0, an, b, b0, bn)
-	__validate_source(r, r0, an + bn)
+---@nodiscard
+function mpn.submul(r, r0, rn, a, a0, an, b, b0, bn)
+	rn = math.max(an + bn, rn)
+
+	__validate_source(r, r0, rn)
 	__validate_source(a, a0, an)
 	__validate_source(b, b0, bn)
 	assert(an >= bn)
 	assert(not rawequal(r, a))
 	assert(not rawequal(r, b))
 
-	-- accumulate the rest of the single digit multiplications
-	for i = 1, bn do
-		local t = r0 + an + i - 1
-		local c = mpn.submul_1(r, r0 + i - 1, a, a0, an, b[b0 + i])
-		mpn.sub_1(r, r0 + t, r, r0 + t, an + bn - t, c)
+	if bn >= KARATSUBA_THRESHOLD then
+		-- use Karatsuba for large multiplications
+		return mpn.submul_karatsuba(r, r0, rn, a, a0, an, b, b0, bn)
 	end
 
-	__validate_dest_suffix(r, r0, an + bn)
-	return r[an + bn]
+	-- accumulate the rest of the single digit multiplications
+	local borrow = 0
+	for i = 1, bn do
+		local t = an + i - 1
+		local c = mpn.submul_1(r, r0 + i - 1, a, a0, an, b[b0 + i])
+		borrow = borrow + mpn.sub_1(r, r0 + t, r, r0 + t, rn - t, c)
+	end
+
+	__validate_dest_suffix(r, r0, rn)
+	return borrow
 end
 
 --- Computes `r[r0:2*n] = a[a0:n] * a[a0:n]`.
@@ -886,6 +1067,7 @@ function mpn.divmod(q, q0, r, r0, n, n0, nn, d, d0, dn)
 		error("division by zero")
 	elseif nn < dn then
 		mpn.copyi(r, r0, n, n0, nn)
+		mpn.zero(r, r0 + nn, dn - nn)
 		mpn.zero(q, q0, math.max(0, nn - dn + 1))
 		__validate_dest_suffix(q, q0, nn - dn + 1)
 		__validate_dest_suffix(r, r0, dn)
