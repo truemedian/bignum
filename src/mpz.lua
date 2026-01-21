@@ -1,7 +1,7 @@
 --- Multiple Precision Integer Arithmetic
 
 local bit = require("bit")
-local mpn = require("src/mpn")
+local mpn = require("mpn")
 
 local max, min, abs, floor, ceil = math.max, math.min, math.abs, math.floor, math.ceil
 local lshift, rshift, band, bor, bxor, bnot = bit.lshift, bit.rshift, bit.band, bit.bor, bit.bxor, bit.bnot
@@ -171,6 +171,15 @@ end
 ---@nodiscard
 function mpz.is_zero(a)
 	return mpn.is_zero(a, 0, abs(a[0]))
+end
+
+--- Returns true if the given integer is one or negative one, false otherwise.
+---@param a mpz
+---@return boolean
+---@nodiscard
+function mpz.is_one(a)
+	local sz_a = abs(a[0])
+	return sz_a == 1 and a[1] == 1
 end
 
 --- Returns true if the given integer is positive, false otherwise.
@@ -480,7 +489,7 @@ function mpz.scalar_sub(r, x, b)
 	x = scalarabs(x)
 	if x > LIMB_MAX then
 		local a = mpz.from_number(x)
-		return mpz.sub(r, b, a)
+		return mpz.sub(r, a, b)
 	end
 
 	local sz_sgn_b = b[0]
@@ -1022,7 +1031,7 @@ end
 ---@param b mpz
 ---@return mpz
 function mpz.divmod_noalias(q, r, a, b)
-	mpz.divrem(q, r, a, b)
+	mpz.divrem_noalias(q, r, a, b)
 
 	local sgn_a = mpz.sign(a)
 	local sgn_b = mpz.sign(b)
@@ -1033,11 +1042,15 @@ function mpz.divmod_noalias(q, r, a, b)
 		-- a is positive and b is negative, q is negative and needs to be fixed
 		mpz.sub_scalar(q, q, 1)
 		r[0] = abs(r[0])
-		mpz.sub(r, r, b)
+
+		local sz_sgn_b = b[0]
+		mpz.add(r, r, b)
 	elseif sgn_a < 0 and sgn_b > 0 and r[0] ~= 0 then
 		-- a is negative and b is positive, q is negative and needs to be fixed
 		mpz.sub_scalar(q, q, 1)
 		r[0] = -abs(r[0])
+
+		local sz_sgn_b = b[0]
 		mpz.add(r, r, b)
 	elseif sgn_a < 0 and sgn_b < 0 then
 		-- a is negative and v is negative, q is correct, r must be negative
@@ -1098,7 +1111,7 @@ function mpz.mod_noalias(r, a, b)
 	elseif sgn_a > 0 and sgn_b < 0 and r[0] ~= 0 then
 		-- a is positive and b is negative, q is negative and needs to be fixed
 		r[0] = abs(r[0])
-		mpz.sub(r, r, b)
+		mpz.add(r, r, b)
 	elseif sgn_a < 0 and sgn_b > 0 and r[0] ~= 0 then
 		-- a is negative and b is positive, q is negative and needs to be fixed
 		r[0] = -abs(r[0])
@@ -1143,6 +1156,8 @@ function mpz.gcd_scalar(r, a, y)
 	if y > LIMB_MAX then
 		local b = mpz.from_number(y)
 		return mpz.gcd(r, a, b)
+	elseif y == 0 then
+		return mpz.absolute(r, a)
 	end
 
 	local sz_a = abs(a[0])
@@ -1206,11 +1221,21 @@ end
 ---@param y integer
 ---@return mpz
 function mpz.pow_scalar(r, a, y)
-	if y < 0 then
-		r[0] = 0
-		return r
+	if mpz.is_one(a) then
+		if y <= 0 then
+			if band(y, 1) == 1 then
+				r[0] = mpz.sign(a)
+			else
+				r[0] = 1
+			end
+			return r
+		end
 	elseif y == 0 then
 		r[0] = 1
+		r[1] = 1
+		return r
+	elseif y < 0 or mpz.is_zero(a) then
+		r[0] = 0
 		return r
 	end
 
@@ -1252,11 +1277,20 @@ function mpz.pow_noalias(r, a, b)
 	local sgn_a = mpz.sign(a)
 	local sgn_b = mpz.sign(b)
 
-	if sgn_b < 0 then
-		r[0] = 0
-		return r
+	if mpz.is_one(a) then
+		if sgn_b <= 0 then
+			if band(b[1] or 0, 1) == 1 then
+				r[0] = mpz.sign(a)
+			else
+				r[0] = 1
+			end
+			return r
+		end
 	elseif sgn_b == 0 then
 		r[0] = 1
+		return r
+	elseif sgn_b < 0 or mpz.is_zero(a) then
+		r[0] = 0
 		return r
 	end
 
@@ -1367,10 +1401,10 @@ function mpz.btest(a, idx)
 
 		-- twos complement negation has the effect of flipping all bits above the first 1 bit.
 		local flipped = mpn.bscan1(a, 0, lmb)
-		if idx >= flipped then
-			return band(a[lmb], lshift(1, off)) ~= 0
-		else
+		if idx > flipped then
 			return band(a[lmb], lshift(1, off)) == 0
+		else
+			return band(a[lmb], lshift(1, off)) ~= 0
 		end
 	else
 		if lmb > sz_a then
@@ -1424,9 +1458,9 @@ function mpz.bset(r, idx)
 				r[i] = LIMB_MAX
 			end
 			-- set the low bits on the most significant limb
-			r[flmb] = bor(r[flmb], lshift(-1, foff))
+			r[flmb] = bor(r[flmb], rshift(LIMB_MAX, LIMB_SIZE - foff))
 		else
-			r[lmb] = bor(r[lmb], band(LIMB_MAX, lshift(-1, foff), lshift(LIMB_MAX, off)))
+			r[lmb] = bor(r[lmb], band(LIMB_MAX, rshift(LIMB_MAX, LIMB_SIZE - foff), lshift(LIMB_MAX, off)))
 		end
 
 		-- unset the flipped bit
@@ -1480,17 +1514,21 @@ function mpz.bclear(r, idx)
 		local new_flipped = mpn.bscan0(r, lmb - 1, sz_a - lmb + 1) + (lmb - 1) * LIMB_SIZE
 		local flmb, foff = mpn.blimb(new_flipped)
 
+		if flmb > sz_a then
+			-- we need to expand the number
+			mpn.zero(r, sz_a, flmb - sz_a)
+			r[0] = -flmb
+		end
+
 		if lmb ~= flmb then
 			-- zero the intermediate limbs
 			for i = lmb, flmb - 1 do
 				r[i] = 0
 			end
-			-- unset the low bits on the most significant limb
-			r[flmb] = band(r[flmb], lshift(-1, foff))
-		else
-			-- unset everything below foff
-			r[flmb] = band(r[flmb], lshift(-1, foff))
 		end
+
+		-- unset everything below foff
+		r[flmb] = band(r[flmb], lshift(LIMB_MAX, foff))
 
 		-- set the flipped bit
 		r[flmb] = bor(r[flmb], lshift(1, foff))
@@ -1564,6 +1602,12 @@ function mpz.band(r, a, b)
 			b_borrow = t < 0 and 1 or 0
 
 			r[i] = band(bnot(t), a[i])
+		end
+
+		if b_borrow == 0 then
+			mpn.copyi(r, sz_b, a, sz_b, sz_a - sz_b)
+			r[0] = mpn.normalized_size(r, 0, sz_a)
+			return r
 		end
 
 		r[0] = mpn.normalized_size(r, 0, sz_b)
@@ -1657,7 +1701,7 @@ function mpz.bor(r, a, b)
 			local ta = a[i] - a_borrow
 			a_borrow = ta < 0 and 1 or 0
 
-			local t = band(ta, bnot(b[i])) + r_carry
+			local t = band(LIMB_MAX, ta, bnot(b[i])) + r_carry
 			r[i] = band(t, LIMB_MAX)
 			r_carry = t > LIMB_MAX and 1 or 0
 		end
@@ -1665,11 +1709,6 @@ function mpz.bor(r, a, b)
 		assert(r_carry == 0) -- b was not normalized
 
 		for i = sz_b + 1, sz_a do
-			if a_borrow == 0 then
-				r[0] = mpn.normalized_size(r, 0, i - 1)
-				return r
-			end
-
 			local ta = a[i] - a_borrow
 			a_borrow = ta < 0 and 1 or 0
 
@@ -1692,7 +1731,7 @@ function mpz.bor(r, a, b)
 			local tb = b[i] - b_borrow
 			b_borrow = tb < 0 and 1 or 0
 
-			local t = band(tb, bnot(a[i])) + r_carry
+			local t = band(LIMB_MAX, tb, bnot(a[i])) + r_carry
 			r[i] = band(t, LIMB_MAX)
 			r_carry = t > LIMB_MAX and 1 or 0
 		end
@@ -1727,7 +1766,7 @@ function mpz.bor(r, a, b)
 			end
 
 			local t = band(ta, tb) + r_carry
-			r[i + i] = band(t, LIMB_MAX)
+			r[i] = band(t, LIMB_MAX)
 			r_carry = t > LIMB_MAX and 1 or 0
 		end
 
@@ -1755,8 +1794,92 @@ function mpz.bnot(r, a)
 	local sz_sgn_a = a[0]
 	local sz_a = abs(sz_sgn_a)
 
-	a[0] = -sz_sgn_a -- flip sign
-	mpn.sub_1(r, 0, a, 0, sz_a, 1) -- subtract 1
+	r[0] = -sz_sgn_a -- flip sign
+	if sz_sgn_a >= 0 then
+		local c = mpn.add_1(r, 0, a, 0, sz_a, 1) -- "subtract" 1
+		if c ~= 0 then
+			r[sz_a + 1] = c
+			r[0] = r[0] - 1
+		end
+	else
+		mpn.sub_1(r, 0, a, 0, sz_a, 1) -- subtract 1
+	end
 end
+
+--- Computes the modular addition of two integers.
+---
+--- `r` MUST NOT alias `m`.
+---
+--- `r = (a + b) mod m`
+---@param r mpz
+---@param a mpz
+---@param b mpz
+---@param m mpz
+function mpz.add_mod(r, a, b, m)
+	assert(not rawequal(r, m), "mpz.add_mod: r and m must not alias")
+
+	mpz.add(r, a, b)
+
+	if mpz.sign(r) == -mpz.sign(m) then
+		mpz.add(r, r, m)
+	elseif mpz.cmpabs(r, m) >= 0 then
+		mpz.sub(r, r, m)
+	end
+
+	if mpz.sign(r) == -mpz.sign(m) or mpz.cmpabs(r, m) >= 0 then
+		mpz.mod_noalias(r, r, m)
+	end
+end
+
+--- Computes the modular subtraction of two integers.
+---
+--- `r` MUST NOT alias `m`.
+---
+--- `r = (a + b) mod m`
+---@param r mpz
+---@param a mpz
+---@param b mpz
+---@param m mpz
+function mpz.sub_mod(r, a, b, m)
+	assert(not rawequal(r, m), "mpz.sub_mod: r and m must not alias")
+
+	mpz.sub(r, a, b)
+
+	if mpz.sign(r) == -mpz.sign(m) then
+		mpz.add(r, r, m)
+	elseif mpz.cmpabs(r, m) >= 0 then
+		mpz.sub(r, r, m)
+	end
+
+	if mpz.sign(r) == -mpz.sign(m) or mpz.cmpabs(r, m) >= 0 then
+		mpz.mod_noalias(r, r, m)
+	end
+end
+
+--- Computes the modular multiplication of two integers.
+---
+--- `r` MUST NOT alias `m`.
+---
+--- `r = (a * b) mod m`
+---@param r mpz
+---@param a mpz
+---@param b mpz
+---@param m mpz
+function mpz.mul_mod(r, a, b, m)
+    assert(not rawequal(r, m), "mpz.mul_mod: r and m must not alias")
+
+    mpz.mul(r, a, b)
+
+    if mpz.sign(r) == -mpz.sign(m) then
+        mpz.add(r, r, m)
+    elseif mpz.cmpabs(r, m) >= 0 then
+        mpz.sub(r, r, m)
+    end
+
+    if mpz.sign(r) == -mpz.sign(m) or mpz.cmpabs(r, m) >= 0 then
+        mpz.mod_noalias(r, r, m)
+    end
+end
+
 
 return mpz

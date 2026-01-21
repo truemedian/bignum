@@ -514,7 +514,7 @@ describe("mpn.addmul_1", function()
 		local a = { LIMB_MAX, LIMB_MAX }
 		local r = { 0, 0 }
 
-		r[3] = mpn.addmul_1(r, 0, a, 0, 2, LIMB_MAX)
+		r[3] = mpn.addmul_1(r, 0, 2, a, 0, 2, LIMB_MAX)
 		assert.are.same(((LIMB_MAX + LIMB_MAX * LIMB_RADIX) * LIMB_MAX), scalar(r, 0, 3))
 	end)
 
@@ -522,7 +522,7 @@ describe("mpn.addmul_1", function()
 		local a = { LIMB_MAX, LIMB_MAX }
 		local r = { LIMB_MAX, LIMB_MAX }
 
-		r[3] = mpn.addmul_1(r, 0, a, 0, 2, LIMB_MAX)
+		r[3] = mpn.addmul_1(r, 0, 2, a, 0, 2, LIMB_MAX)
 		assert.are.same(
 			((LIMB_MAX + LIMB_MAX * LIMB_RADIX) + (LIMB_MAX + LIMB_MAX * LIMB_RADIX) * LIMB_MAX),
 			scalar(r, 0, 3)
@@ -535,7 +535,7 @@ describe("mpn.submul_1", function()
 		local a = { 1, 1 }
 		local r = { 5, 4 }
 
-		r[3] = mpn.submul_1(r, 0, a, 0, 2, 4)
+		r[3] = mpn.submul_1(r, 0, 2, a, 0, 2, 4)
 		assert.are.same(1, scalar(r, 0, 3))
 	end)
 end)
@@ -557,8 +557,9 @@ describe("mpn.addmul", function()
 		local b = { 1, 2 }
 		local r = { 1, 1, 1, 1 }
 
-		mpn.addmul(r, 0, 4, a, 0, 2, b, 0, 2)
-		assert.are.same({ 2, 5, 5, 1, 0 }, r)
+		local c = mpn.addmul(r, 0, 4, a, 0, 2, b, 0, 2)
+		assert.are.same({ 2, 5, 5, 1 }, r)
+		assert.are.same(0, c)
 	end)
 
 	it("multiplies with large overflow", function()
@@ -566,8 +567,9 @@ describe("mpn.addmul", function()
 		local b = { LIMB_MAX, LIMB_MAX }
 		local r = { LIMB_MAX, LIMB_MAX, LIMB_MAX, LIMB_MAX }
 
-		mpn.addmul(r, 0, 4, a, 0, 2, b, 0, 2)
-		assert.are.same({ 0, 0, LIMB_MAX - 1, LIMB_MAX, 1 }, r)
+		local c = mpn.addmul(r, 0, 4, a, 0, 2, b, 0, 2)
+		assert.are.same({ 0, 0, LIMB_MAX - 1, LIMB_MAX }, r)
+		assert.are.same(1, c)
 	end)
 end)
 
@@ -577,7 +579,7 @@ describe("mpn.submul", function()
 		local b = { 1, 2 }
 		local r = { 1, 1, 1, 1 }
 
-		mpn.submul(r, 0, 4, a, 0, 2, b, 0, 2)
+		local c = mpn.submul(r, 0, 4, a, 0, 2, b, 0, 2)
 		assert.are.same({ 0, LIMB_MAX - 2, LIMB_MAX - 3, 0 }, r)
 	end)
 end)

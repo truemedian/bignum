@@ -1,8 +1,8 @@
 require("busted.runner")()
 
 local bit = require("bit")
-local mpz = require("src/mpz")
-local mpn = require("src/mpn")
+local mpz = require("mpz")
+local mpn = require("mpn")
 
 local LIMB_SIZE = mpn.LIMB_SIZE
 local LIMB_RADIX = mpn.LIMB_RADIX

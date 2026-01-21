@@ -1,7 +1,7 @@
 --- Multiple Precision Rational Arithmetic
 
 local bit = require("bit")
-local mpz = require("./mpz")
+local mpz = require("mpz")
 
 --- A multiple precision rational.
 ---
@@ -76,6 +76,22 @@ end
 ---@nodiscard
 function mpq.to_number(a)
 	return mpz.to_number(a.p) / mpz.to_number(a.q)
+end
+
+--- Returns the integer and fractional part of the given rational.
+---@param i? mpz
+---@param f? mpz
+---@param a mpq
+function mpq.modf(i, f, a)
+	if mpz.is_negative(a.q) then
+		mpz.neg(a.p)
+		mpz.neg(a.q)
+	end
+
+	i = i or mpz.from_zero()
+	f = f or mpz.from_zero()
+
+    mpz.divmod(i, f, a.p, a.q)
 end
 
 --- Returns a string representation of the given rational in fraction notation.
@@ -162,8 +178,8 @@ end
 ---@param r mpq
 ---@param a mpq
 function mpq.absolute(r, a)
-	mpz.absolute(r.p , a.p)
-	mpz.absolute(r.q , a.q)
+	mpz.absolute(r.p, a.p)
+	mpz.absolute(r.q, a.q)
 end
 
 --- Reduces the given rational to its simplest form.
@@ -207,6 +223,12 @@ function mpq.add(r, a, b)
 
 	if rawequal(r, b) then
 		b = mpq.dup(b)
+	end
+
+	if mpz.cmp(a.q, b.q) == 0 then
+		mpz.add(r.p, a.p, b.p)
+		mpz.clone(r.q, a.q)
+		return
 	end
 
 	mpz.mul(r.p, a.p, b.q)
@@ -259,6 +281,12 @@ function mpq.sub(r, a, b)
 		b = mpq.dup(b)
 	end
 
+	if mpz.cmp(a.q, b.q) == 0 then
+		mpz.sub(r.p, a.p, b.p)
+		mpz.clone(r.q, a.q)
+		return
+	end
+
 	mpz.mul(r.p, a.p, b.q)
 	mpz.mul(r.q, a.q, b.p)
 	mpz.sub(r.p, r.p, r.q)
@@ -305,7 +333,6 @@ end
 function mpq.sqr(r, a)
 	mpz.sqr(r.p, a.p)
 	mpz.sqr(r.q, a.q)
-	mpq.reduce(r)
 end
 
 --- Computes the division of two rationals.
@@ -327,9 +354,9 @@ end
 ---@param a mpq
 ---@param y integer
 function mpq.pow_scalar(r, a, y)
+	mpq.reduce(r)
 	mpz.pow_scalar(r.p, a.p, y)
 	mpz.pow_scalar(r.q, a.q, y)
-	mpq.reduce(r)
 end
 
 --- Computes the exponentiation of a rational to an integer power.
@@ -339,9 +366,9 @@ end
 ---@param a mpq
 ---@param b mpz
 function mpq.pow(r, a, b)
+	mpq.reduce(r)
 	mpz.pow(r.p, a.p, b)
 	mpz.pow(r.q, a.q, b)
-	mpq.reduce(r)
 end
 
 return mpq
