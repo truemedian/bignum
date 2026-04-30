@@ -403,7 +403,7 @@ function mpn.sub_1(r, r0, a, a0, n, y)
 			-- no borrow necessary, so we can just copy the rest of the number
 			mpn.copyi(r, r0 + i - 1, a, a0 + i - 1, n - i + 1)
 
-			__validate_dest_suffix(r, r0, n - i + 1)
+			__validate_dest_suffix(r, r0, n)
 			return 0
 		end
 
@@ -494,7 +494,7 @@ function mpn.mul_1(r, r0, a, a0, n, y)
 	return carry
 end
 
---- Computes `r[r0:max(rn,an)n] += a[a0:an] * y`. Returns the carried limb.
+--- Computes `r[r0:max(rn,an)] += a[a0:an] * y`. Returns the carried limb.
 ---@param r mpn.limbs
 ---@param r0 mpn.offset
 ---@param rn mpn.size
@@ -545,7 +545,7 @@ function mpn.submul_1(r, r0, rn, a, a0, an, y)
 	local borrow = 0
 
 	for i = 1, an do
-		local rk = r[r0 + i] - a[a0 + i] * y - borrow
+		local rk = (r[r0 + i] or 0) - a[a0 + i] * y - borrow
 		borrow = rk < 0 and ceil(-rk / LIMB_RADIX) or 0
 		r[r0 + i] = band(rk, LIMB_MAX)
 	end
@@ -1496,7 +1496,7 @@ function mpn.gcd(r, r0, a, a0, an, b, b0, bn)
 	bn = mpn.normalized_size(b, b0, bn)
 
 	while true do
-		assert(band(a[b0 + 1], 1) == 1)
+		assert(band(a[a0 + 1], 1) == 1)
 		assert(band(b[b0 + 1], 1) == 1)
 
 		if mpn.cmp(a, a0, an, b, b0, bn) >= 0 then
@@ -1864,24 +1864,34 @@ end
 function mpn.bextract(r, r0, a, a0, n, idx, width)
 	__validate_dest(r, r0, n)
 	__validate_source(a, a0, n)
+	assert(width >= 0, "width must be non-negative")
+
+	if width == 0 then
+		return 0
+	end
 
 	local limb_offset = rshift(idx, LIMB_SIZE)
 	local inner_offset = band(idx, LIMB_MAX)
 
 	local limb_width_max = ceil((width + inner_offset) / LIMB_SIZE)
 	local limb_width = ceil(width / LIMB_SIZE)
-	local limb_high = ceil((width + 1) / LIMB_SIZE)
+	local limb_high = limb_width
+	local available = math.max(0, n - limb_offset)
+	local shift_n = math.min(limb_width_max, available)
 
 	-- store the bits including any overflowed high bits in the result
-	mpn.rshift(r, r0, a, a0 + limb_offset, math.min(limb_width_max, n - limb_offset), inner_offset)
+	mpn.rshift(r, r0, a, a0 + limb_offset, shift_n, inner_offset)
 
 	if limb_width_max ~= limb_width then
 		r[r0 + limb_width_max] = 0
 	end
 
 	-- mask away the high bits we don't want
-	local high_mask = lshift(1, width % LIMB_SIZE) - 1
-	r[r0 + limb_high] = band(r[r0 + limb_high], high_mask)
+	local rem = width % LIMB_SIZE
+	if rem ~= 0 then
+		local high_mask = lshift(1, rem) - 1
+		r[r0 + limb_high] = band(r[r0 + limb_high] or 0, high_mask)
+	end
 
 	__validate_dest_suffix(r, r0, limb_width)
 	return limb_width
