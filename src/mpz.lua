@@ -1551,7 +1551,30 @@ function mpz.binvert(a, idx)
 end
 
 function mpz.bextract(r, a, idx, width)
-	error("todo")
+	assert(idx >= 0, "idx must be non-negative")
+	assert(width >= 0, "width must be non-negative")
+
+	if width == 0 then
+		r[0] = 0
+		return r
+	end
+
+	if rawequal(r, a) then
+		a = mpz.dup(a)
+	end
+
+	local limbs = ceil(width / LIMB_SIZE)
+	mpn.zero(r, 0, limbs)
+
+	for i = 0, width - 1 do
+		if mpz.btest(a, idx + i) then
+			local lmb, off = mpn.blimb(i)
+			r[lmb] = bor(r[lmb], lshift(1, off))
+		end
+	end
+
+	r[0] = mpn.normalized_size(r, 0, limbs)
+	return r
 end
 
 --- Computes the bitwise AND of two integers.
@@ -1779,7 +1802,15 @@ function mpz.bor(r, a, b)
 end
 
 function mpz.bxor(r, a, b)
-	error("todo")
+	local ab = mpz.from_zero()
+	local ao = mpz.from_zero()
+	local nab = mpz.from_zero()
+
+	mpz.band(ab, a, b)
+	mpz.bor(ao, a, b)
+	mpz.bnot(nab, ab)
+	mpz.band(r, ao, nab)
+	return r
 end
 
 --- Computes the bitwise NOT of an integer.
