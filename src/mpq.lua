@@ -82,16 +82,22 @@ end
 ---@param i? mpz
 ---@param f? mpz
 ---@param a mpq
+---@return mpz
+---@return mpz
 function mpq.modf(i, f, a)
-	if mpz.is_negative(a.q) then
-		mpz.neg(a.p)
-		mpz.neg(a.q)
+	local p, q = a.p, a.q
+	if mpz.is_negative(q) then
+		p = mpz.dup(p)
+		q = mpz.dup(q)
+		mpz.neg(p)
+		mpz.neg(q)
 	end
 
 	i = i or mpz.from_zero()
 	f = f or mpz.from_zero()
 
-    mpz.divmod(i, f, a.p, a.q)
+	mpz.divmod(i, f, p, q)
+	return i, f
 end
 
 --- Returns a string representation of the given rational in fraction notation.
@@ -106,11 +112,14 @@ end
 ---@param a mpq
 ---@param digits integer
 ---@param base? integer
+---@return string
 function mpq.to_string_point(a, digits, base)
 	base = base or 10
+	assert(digits >= 0, "digits must be non-negative")
+	digits = math.floor(digits)
 
-	local exp = mpz.from_number(base)
-	mpz.pow_scalar(exp, exp, digits)
+	local exp = mpz.from_zero()
+	mpz.pow_scalar(exp, mpz.from_number(base), digits)
 
 	local tmp = mpz.from_zero()
 	mpz.mul(tmp, a.p, exp)
@@ -119,7 +128,21 @@ function mpq.to_string_point(a, digits, base)
 	mpz.divrem(tmp, unused, tmp, a.q)
 
 	local str = mpz.to_string(tmp, base)
-	return str:sub(1, #str - digits) .. "." .. str:sub(#str - digits + 1)
+	local sign = ""
+	if str:sub(1, 1) == "-" then
+		sign = "-"
+		str = str:sub(2)
+	end
+
+	if digits == 0 then
+		return sign .. str
+	end
+
+	if #str <= digits then
+		str = str .. string.rep("0", digits - #str + 1)
+	end
+
+	return sign .. str:sub(1, #str - digits) .. "." .. str:sub(#str - digits + 1)
 end
 
 --- Returns true if the given rational is zero, false otherwise.
@@ -188,13 +211,22 @@ function mpq.reduce(r)
 	local gcd = mpz.from_zero()
 	mpz.gcd(gcd, r.p, r.q)
 
-	local one = mpz.from_one()
-	if mpz.cmp(gcd, one) == 0 then
+	if mpz.is_one(gcd) then
+		if mpz.is_negative(r.q) then
+			mpz.neg(r.p)
+			mpz.neg(r.q)
+		end
 		return
 	end
 
-	mpz.divrem(r.p, one, r.p, gcd)
-	mpz.divrem(r.q, one, r.q, gcd)
+	local rem = mpz.from_zero()
+	mpz.divrem(r.p, rem, r.p, gcd)
+	mpz.divrem(r.q, rem, r.q, gcd)
+
+	if mpz.is_negative(r.q) then
+		mpz.neg(r.p)
+		mpz.neg(r.q)
+	end
 end
 
 --- Computes the sum of an rational and a scalar.
@@ -342,6 +374,16 @@ end
 ---@param a mpq
 ---@param b mpq
 function mpq.div(r, a, b)
+	if rawequal(r, a) then
+		a = mpq.dup(a)
+	end
+
+	if rawequal(r, b) then
+		b = mpq.dup(b)
+	end
+
+	assert(not mpz.is_zero(b.p), "division by zero")
+
 	mpz.mul(r.p, a.p, b.q)
 	mpz.mul(r.q, a.q, b.p)
 	mpq.reduce(r)
@@ -354,9 +396,21 @@ end
 ---@param a mpq
 ---@param y integer
 function mpq.pow_scalar(r, a, y)
+	if rawequal(r, a) then
+		a = mpq.dup(a)
+	end
+
+	if y < 0 then
+		assert(not mpz.is_zero(a.p), "division by zero")
+		y = -y
+		mpz.pow_scalar(r.p, a.q, y)
+		mpz.pow_scalar(r.q, a.p, y)
+	else
+		mpz.pow_scalar(r.p, a.p, y)
+		mpz.pow_scalar(r.q, a.q, y)
+	end
+
 	mpq.reduce(r)
-	mpz.pow_scalar(r.p, a.p, y)
-	mpz.pow_scalar(r.q, a.q, y)
 end
 
 --- Computes the exponentiation of a rational to an integer power.
@@ -366,9 +420,24 @@ end
 ---@param a mpq
 ---@param b mpz
 function mpq.pow(r, a, b)
+	if rawequal(r, a) then
+		a = mpq.dup(a)
+	end
+
+	local exp = b
+	if mpz.is_negative(exp) then
+		assert(not mpz.is_zero(a.p), "division by zero")
+		exp = mpz.dup(exp)
+		mpz.abs(exp)
+
+		mpz.pow(r.p, a.q, exp)
+		mpz.pow(r.q, a.p, exp)
+	else
+		mpz.pow(r.p, a.p, exp)
+		mpz.pow(r.q, a.q, exp)
+	end
+
 	mpq.reduce(r)
-	mpz.pow(r.p, a.p, b)
-	mpz.pow(r.q, a.q, b)
 end
 
 return mpq
